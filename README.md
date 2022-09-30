@@ -1,4 +1,6 @@
 # Kinde Android SDK
+## Requirements
+Minimum supported Android SDK is Android SDK 21 (Android 5.0 Lollipop)
 
 ## How to build
 ```
@@ -40,8 +42,10 @@
             <meta-data
             android:name="au.kinde.clientId"
             android:value="example@example" />
-      * Client Secret:
 
-            <meta-data
-            android:name="au.kinde.clientSecret"
-            android:value="verysecretstring" />
+##How to authorize
+1. With PKCE
+   - call `login` function of SDK with `grantType` parameter set to `GrantType.PKCE` ([See GrantType class for available options](sdk/src/main/java/au/kinde/sdk/GrantType.kt))
+
+2. Without PKCE
+    -  call `login` function of SDK without parameters or with `grantType` parameter set to `GrantType.NONE` ([See GrantType class for available options](sdk/src/main/java/au/kinde/sdk/GrantType.kt))

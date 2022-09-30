@@ -5,5 +5,5 @@ package au.kinde.sdk
  * @since 1.0
  */
 enum class GrantType {
-    PKCE
+    PKCE, NONE
 }
