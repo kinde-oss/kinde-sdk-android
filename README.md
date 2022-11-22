@@ -11,13 +11,32 @@ Minimum supported Android SDK is Android SDK 21 (Android 5.0 Lollipop)
 ## How to integrate
 1. Set up Kinde environment
    - Open Kinde settings in the webapp.
-   - Navigate to `App keys` section
-   - Add urls for callback and logout:
-
+1.1 Create a new app
+   - Navigate to `Applications` section
+   - Click to `Add application` button
+   - Fill a name of this application:
+     For example:
+        Collapp.Android  
+   - Select `Regular Web Application` type
+   - Click to `Save` button
+1.2 Set up the application
+   - Open `Details` section of the your newly created app
+   - Navigate to `Callback URLs` section
+   - Add the following url to the `Allowed callback URLs` section:
          au.kinde://<your kinde url>//kinde_callback
+   
       For example:
-
          au.kinde://coolapp.kinde.com/kinde_callback
+   - Add the following url to the `Allowed logout redirect URLs` section :
+         au.kinde://<your kinde url>//kinde_callback
+    
+     For example:
+         au.kinde://coolapp.kinde.com/kinde_callback
+   - Click `Save` button
+   - Navigate to the `Authentication` section
+   - Switch on `Email authentication`
+   - Select `Passwordless` type
+   - Click `Save` button
 
 2. Setup Android project
    - Add `kinde-sdk.arr` to your Android project:
