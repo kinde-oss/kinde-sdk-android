@@ -33,10 +33,7 @@ Minimum supported Android SDK is Android SDK 21 (Android 5.0 Lollipop)
      For example:
          au.kinde://coolapp.kinde.com/kinde_callback
    - Click `Save` button
-   - Navigate to the `Authentication` section
-   - Switch on `Email authentication`
-   - Select `Passwordless` type
-   - Click `Save` button
+   - Navigate to the `Authentication` section and set it up with your preferences
 
 2. Setup Android project
    - Add `kinde-sdk.arr` to your Android project:
@@ -63,14 +60,14 @@ Minimum supported Android SDK is Android SDK 21 (Android 5.0 Lollipop)
             android:value="example@example" />
 
 ## How to initialize
-To get instance of SDK just instantiate `KindeSDK` ([See KindeSDK](sdk/src/main/java/au/kinde/sdk/KindeSDK.kt)) class with `activity` ([See AppCompatActivity](androidx.appcompat.app.AppCompatActivity.java)) and `sdkListener` ([See SDKListener](sdk/src/main/java/au/kinde/sdk/KindeSDK.SDKListener.kt))  
+To get instance of SDK just instantiate `KindeSDK` ([See KindeSDK](/sdk/src/main/kotlin/au/kinde/sdk/KindeSDK.kt)) class with `activity` ([See AppCompatActivity](https://developer.android.com/reference/androidx/appcompat/app/AppCompatActivity)) and `sdkListener` ([See SDKListener](sdk/src/main/kotlin/au/kinde/sdk/SDKListener.kt))  
 
 ## How to authorize
 1. With PKCE
-   - call `login` function of SDK with `grantType` parameter set to `GrantType.PKCE` ([See GrantType class for available options](sdk/src/main/java/au/kinde/sdk/GrantType.kt))
+   - call `login` function of SDK with `grantType` parameter set to `GrantType.PKCE` ([See GrantType class for available options](sdk/src/main/kotlin/au/kinde/sdk/GrantType.kt))
 
 2. Without PKCE
-    - call `login` function of SDK without parameters or with `grantType` parameter set to `GrantType.NONE` ([See GrantType class for available options](sdk/src/main/java/au/kinde/sdk/GrantType.kt))
+    - call `login` function of SDK without parameters or with `grantType` parameter set to `GrantType.NONE` ([See GrantType class for available options](sdk/src/main/kotlin/au/kinde/sdk/GrantType.kt))
 
 ## How to use API
 SDK provides all available API methods as functions: just call one of functions to get data or pass information to server.

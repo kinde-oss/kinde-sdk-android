@@ -147,6 +147,7 @@ class KindeSDK(
         val endSessionRequest = EndSessionRequest.Builder(serviceConfiguration)
             .setPostLogoutRedirectUri(Uri.parse(REDIRECT_URI.format(domain)))
             .setAdditionalParameters(mapOf(REDIRECT_PARAM_NAME to REDIRECT_URI.format(domain)))
+            .setState(null)
             .build()
         val endSessionIntent = authService.getEndSessionRequestIntent(endSessionRequest)
         endTokenLauncher.launch(endSessionIntent)
@@ -201,14 +202,6 @@ class KindeSDK(
             sdkListener.onException(Exception("response is unsuccessful:${response.code()} ${response.message()}"))
         }
         return null
-    }
-
-    interface SDKListener {
-        fun onNewToken(token: String)
-
-        fun onLogout()
-
-        fun onException(exception: Exception)
     }
 
     companion object {
