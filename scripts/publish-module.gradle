@@ -7,11 +7,11 @@ version = PUBLISH_VERSION
 task androidSourcesJar(type: Jar) {
     archiveClassifier.set('sources')
     if (project.plugins.findPlugin("com.android.library")) {
-        // For Android libraries
+        // Android libraries
         from android.sourceSets.main.java.srcDirs
         from android.sourceSets.main.kotlin.srcDirs
     } else {
-        // For pure Kotlin libraries, in case you have them
+        // Pure kotlin libraries
         from sourceSets.main.java.srcDirs
         from sourceSets.main.kotlin.srcDirs
     }
@@ -36,7 +36,6 @@ afterEvaluate {
                     from components.java
                 }
 
-                // artifact("$buildDir/outputs/aar/sdk-release.aar")
                 artifact androidSourcesJar
 
                 pom {
