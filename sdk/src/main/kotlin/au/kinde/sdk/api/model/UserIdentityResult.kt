@@ -26,29 +26,17 @@ import com.google.gson.annotations.SerializedName
 /**
  * 
  *
- * @param id 
- * @param preferredEmail 
- * @param providedId 
- * @param lastName 
- * @param firstName 
+ * @param created 
+ * @param identityId 
  */
 
-data class UserProfile (
+data class UserIdentityResult (
 
-    @SerializedName("id")
-    val id: kotlin.String? = null,
+    @SerializedName("created")
+    val created: kotlin.Boolean? = null,
 
-    @SerializedName("preferred_email")
-    val preferredEmail: kotlin.String? = null,
-
-    @SerializedName("provided_id")
-    val providedId: kotlin.String? = null,
-
-    @SerializedName("last_name")
-    val lastName: kotlin.String? = null,
-
-    @SerializedName("first_name")
-    val firstName: kotlin.String? = null
+    @SerializedName("identity_id")
+    val identityId: kotlin.Int? = null
 
 )
 

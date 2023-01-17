@@ -26,13 +26,13 @@ import com.google.gson.annotations.SerializedName
 /**
  * 
  *
- * @param code 
+ * @param email 
  */
 
-data class OrganizationCode (
+data class CreateUserRequestIdentitiesInnerDetails (
 
-    @SerializedName("code")
-    val code: kotlin.String? = null
+    @SerializedName("email")
+    val email: kotlin.String? = null
 
 )
 
