@@ -20,35 +20,25 @@
 
 package au.kinde.sdk.api.model
 
+import au.kinde.sdk.api.model.CreateUserRequestIdentitiesInner
+import au.kinde.sdk.api.model.CreateUserRequestProfile
 
 import com.google.gson.annotations.SerializedName
 
 /**
  * 
  *
- * @param id 
- * @param preferredEmail 
- * @param providedId 
- * @param lastName 
- * @param firstName 
+ * @param profile 
+ * @param identities 
  */
 
-data class UserProfile (
+data class CreateUserRequest (
 
-    @SerializedName("id")
-    val id: kotlin.String? = null,
+    @SerializedName("profile")
+    val profile: CreateUserRequestProfile? = null,
 
-    @SerializedName("preferred_email")
-    val preferredEmail: kotlin.String? = null,
-
-    @SerializedName("provided_id")
-    val providedId: kotlin.String? = null,
-
-    @SerializedName("last_name")
-    val lastName: kotlin.String? = null,
-
-    @SerializedName("first_name")
-    val firstName: kotlin.String? = null
+    @SerializedName("identities")
+    val identities: kotlin.collections.List<CreateUserRequestIdentitiesInner>? = null
 
 )
 

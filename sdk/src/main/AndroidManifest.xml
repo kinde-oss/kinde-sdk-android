@@ -16,7 +16,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
 
-                <data android:scheme="au.kinde" />
+                <data android:scheme="kinde.sdk" />
             </intent-filter>
         </activity>
     </application>
