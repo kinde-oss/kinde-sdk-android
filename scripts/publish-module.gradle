@@ -2,7 +2,7 @@ apply plugin: 'maven-publish'
 apply plugin: 'signing'
 
 group = PUBLISH_GROUP_ID
-version = PUBLISH_VERSION
+version = sdk_version // Set up version in build.gradle at project's root
 
 task androidSourcesJar(type: Jar) {
     archiveClassifier.set('sources')
@@ -28,7 +28,7 @@ afterEvaluate {
 
                 groupId PUBLISH_GROUP_ID
                 artifactId PUBLISH_ARTIFACT_ID
-                version PUBLISH_VERSION
+                version sdk_version
 
                 if (project.plugins.findPlugin("com.android.library")) {
                     from components.release

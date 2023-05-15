@@ -203,6 +203,101 @@ Once a user has been verified, your application will be returned the JWT token w
     )
 ````
 
+## Feature flags
+When a user signs in the Access token your product/application receives contains a custom claim called `feature_flags` which is an object detailing the feature flags for that user.
+You can set feature flags in your Kinde account. Here’s an example.
+````
+    feature_flags: {
+        theme: {
+              "t": "s",
+              "v": "pink"
+        },
+        is_dark_mode: {
+              "t": "b",
+              "v": true
+        },
+        competitions_limit: {
+              "t": "i",
+              "v": 5
+        }
+    }
+````
+In order to minimize the payload in the token we have used single letter keys / values where possible. The single letters represent the following:
+`t` = type,
+`v` = value, 
+`s` = String,
+`b` = Boolean,
+`i` = Integer,
+
+````
+/**
+  * Get a flag from the feature_flags claim of the access_token.
+  * @param {String} code - The name of the flag.
+  * @param {Any?} [defaultValue] - A fallback value if the flag isn't found.
+  * @param {[FlagType?](/sdk/src/main/kotlin/au/kinde/sdk/model/Flag.kt} [flagType] - The data type of the flag (integer / boolean / string).
+  * @return {[Flag?](/sdk/src/main/kotlin/au/kinde/sdk/model/Flag.kt} Flag details.
+*/
+sdk.getFlag(code, defaultValue, flagType);
+
+/* Example usage */
+
+sdk.getFlag("theme");
+/*{
+//   "code": "theme",
+//   "type": "String",
+//   "value": "pink",
+//   "isDefault": false // whether the fallback value had to be used
+*/}
+
+sdk.getFlag("create_competition", false);
+/*{
+     "code": "create_competition",
+     "value": false,
+     "isDefault": true // because fallback value had to be used
+}*/
+````
+We also require wrapper functions by type which should leverage `getFlag` above.
+
+We provide helper functions to more easily access feature flags:
+- Booleans:
+    ````
+  /**
+  * Get a boolean flag from the feature_flags claim of the access_token.
+  * @param {String} code - The name of the flag.
+  * @param {Boolean} [defaultValue] - A fallback value if the flag isn't found.
+  * @return {Boolean}
+    **/
+    sdk.getBooleanFlag(code, defaultValue);
+
+    /* Example usage */
+    sdk.getBooleanFlag("is_dark_mode");
+    // true
+
+    sdk.getBooleanFlag("is_dark_mode", false);
+    // true
+
+    sdk.getBooleanFlag("new_feature", false);
+    // false (flag does not exist so falls back to default)
+  ````
+- Strings and integers work in the same way as booleans above:
+    ````
+  /**
+  * Get a string flag from the feature_flags claim of the access_token.
+  * @param {String} code - The name of the flag.
+  * @param {String} [defaultValue] - A fallback value if the flag isn't found.
+  * @return {String}
+  */
+  getStringFlag(code, defaultValue);
+
+  /**
+  * Get an integer flag from the feature_flags claim of the access_token.
+  * @param {String} code - The name of the flag.
+  * @param {Int} [defaultValue] - A fallback value if the flag isn't found.
+  * @return {Int}
+  */
+  getIntegerFlag(code, defaultValue);
+  ````
+
 ## Audience
 An `audience` is the intended recipient of an access token - for example the API for your application. 
 The audience argument can be passed to the `meta-data` to `<application>` section of your `AndroidManifest.xml` to request an audience be added to the provided token.
@@ -254,9 +349,9 @@ We have provided a helper to grab any claim from your id or access tokens. The h
 ````
     ...
     sdk.getClaim("aud")
-    // "api.yourapp.com"
+    // {name: "aud", "value": ["api.yourapp.com"]}
     sdk.getClaim("given_name", TokenType.ID_TOKEN)
-    // "David"
+    // {name: "given_name", "value": "David"}
     ...
 ````
 
@@ -346,8 +441,8 @@ Once the user has successfully authenticated, you’ll have a JWT and possibly a
 | `createOrg`            | Starts the registration flow and creates a new organization for your business          | `grantType`: [GrantType?](/sdk/src/main/kotlin/au/kinde/sdk/GrantType.kt), `orgName`: String?   | `sdk.createOrg("your_organization_name")`; or  `sdk.createOrg(GrantType.PKCE, "your_organization_name")` |                                                                                                                                |
 | `logout`               | Logs the user out of Kinde                                                             |                                                                                                 | `sdk.logout()`                                                                                           |                                                                                                                                |
 | `isAuthenticated`      | Checks that access token is present                                                    |                                                                                                 | `sdk.isAuthenticated()`                                                                                  | `true`                                                                                                                         |
-| `getUserDetails`       | Returns the profile for the current user                                               |                                                                                                 | `sdk.getUserDetails()`                                                                                   | `{givenName: "Dave"; id: "abcdef"; familyName: "Smith"; email: dave@smith.com"}`                                               |
-| `getClaim`             | Gets a claim from an access or id token                                                | `claim`: String, `tokenType`: [TokenType](/sdk/src/main/kotlin/au/kinde/sdk/model/TokenType.kt) | `sdk.getClaim('given_name', TokenType.ID_TOKEN);`                                                        | `"David"`                                                                                                                      |
+| `getUserDetails`       | Returns the profile for the current user                                               |                                                                                                 | `sdk.getUserDetails()`                                                                                   | `{givenName: "Dave", id: "abcdef", familyName: "Smith", email: "dave@smith.com", picture: "coolavatar"}`                       |
+| `getClaim`             | Gets a claim from an access or id token                                                | `claim`: String, `tokenType`: [TokenType](/sdk/src/main/kotlin/au/kinde/sdk/model/TokenType.kt) | `sdk.getClaim('given_name', TokenType.ID_TOKEN);`                                                        | `{name: "given_name", "value": "David"}`                                                                                       |
 | `getPermissions`       | Returns all permissions for the current user for the organization they are logged into |                                                                                                 | `sdk.getPermissions()`                                                                                   | `{orgCode: "org_1234", permissions: ["create:todos", "update:todos", "read:todos""create:todos","update:todos","read:todos"]}` |
 | `getPermission`        | Returns the state of a given permission                                                | `permission`: String                                                                            | `sdk.getPermission("read:todos")`                                                                        | `{orgCode: "org_1234", isGranted: true}`                                                                                       |
 | `getUserOrganizations` | Gets an array of all organizations the user has access to                              |                                                                                                 | `sdk.getUserOrganizations()`                                                                             | `{orgCodes: ["org_1234", "org_5678""org1_234","org_5678"]}`                                                                    |
