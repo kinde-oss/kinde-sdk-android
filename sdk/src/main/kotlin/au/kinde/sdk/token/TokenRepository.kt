@@ -32,7 +32,7 @@ class TokenRepository(private val tokenApi: TokenApi, private val version: Strin
         if (exception != null) return Pair(
             null,
             AuthorizationException(
-                TYPE_GENERAL_ERROR, +
+                TYPE_GENERAL_ERROR,
                 SERVER_ERROR.code,
                 null,
                 exception.message,
