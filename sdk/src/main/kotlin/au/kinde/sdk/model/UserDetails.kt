@@ -8,5 +8,6 @@ data class UserDetails(
     val id: String,
     val givenName: String,
     val familyName: String,
-    val email: String
+    val email: String,
+    val picture: String
 )

@@ -6,6 +6,8 @@ package au.kinde.sdk
  */
 object NotAuthorizedException : IllegalStateException()
 
+object TokenExpiredException : IllegalStateException()
+
 object WrongThreadException : IllegalStateException()
 
 class AuthException(override val message: String?) : Exception()
