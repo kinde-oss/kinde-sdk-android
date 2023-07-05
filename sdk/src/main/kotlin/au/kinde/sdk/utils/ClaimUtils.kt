@@ -70,7 +70,7 @@ object ClaimDelegate : ClaimApi {
 
     override fun getFlag(code: String, defaultValue: Any?, flagType: FlagType?): Flag? {
         val flagClaim = getClaimInternal(FEATURE_FLAGS_CLAIM, TokenType.ACCESS_TOKEN, String::class)
-        val flagsObject = JSONObject(flagClaim.orEmpty())
+        val flagsObject = flagClaim?.let { JSONObject(flagClaim) } ?: JSONObject()
         return when {
             !flagsObject.has(code) && defaultValue != null -> Flag(code, null, defaultValue, true)
             flagsObject.has(code) -> {
