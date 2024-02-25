@@ -285,6 +285,9 @@ class KindeSDK(
     }
 
     private fun checkToken(): Boolean {
+        if (isTokenExpired(TokenType.ACCESS_TOKEN)) {
+            getToken(state.createTokenRefreshRequest())
+        }
         if (state.isAuthorized) {
             store.getKeys()?.let { keysString ->
                 try {
@@ -331,6 +334,19 @@ class KindeSDK(
             }
         }
         return null
+    }
+
+    private fun isTokenExpired(tokenType: TokenType): Boolean {
+        val expClaim = getClaim("exp", tokenType)
+        if (expClaim.value != null) {
+            val expireEpochMillis = (expClaim.value as Long) * 1000
+            val currentTimeMillis = System.currentTimeMillis()
+
+            if (currentTimeMillis > expireEpochMillis) {
+                return true
+            }
+        }
+        return false
     }
 
     companion object {
