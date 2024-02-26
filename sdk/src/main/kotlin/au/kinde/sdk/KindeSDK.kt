@@ -63,6 +63,12 @@ class KindeSDK(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val data = result.data
+
+        if (result.resultCode == AppCompatActivity.RESULT_CANCELED && data != null) {
+            val ex = AuthorizationException.fromIntent(data)
+            ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+        }
+
         if (result.resultCode == AppCompatActivity.RESULT_OK && data != null) {
             val resp = AuthorizationResponse.fromIntent(data)
             val ex = AuthorizationException.fromIntent(data)
