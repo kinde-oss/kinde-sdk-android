@@ -191,17 +191,18 @@ class KindeSDK(
     override fun getToken(tokenType: TokenType): String? =
         if (tokenType == TokenType.ACCESS_TOKEN) state.accessToken else state.idToken
 
-    fun login(type: GrantType? = null, orgCode: String? = null) {
-        login(type, orgCode, mapOf())
+    fun login(type: GrantType? = null, orgCode: String? = null, loginHint: String? = null) {
+        login(type, orgCode, loginHint, mapOf())
     }
 
-    fun register(type: GrantType? = null, orgCode: String? = null) {
-        login(type, orgCode, mapOf(REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE))
+    fun register(type: GrantType? = null, orgCode: String? = null, loginHint: String? = null) {
+        login(type, orgCode, loginHint, mapOf(REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE))
     }
 
     fun createOrg(type: GrantType? = null, orgName: String) {
         login(
             type,
+            null,
             null,
             mapOf(
                 REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE,
@@ -238,6 +239,7 @@ class KindeSDK(
     private fun login(
         type: GrantType? = null,
         orgCode: String? = null,
+        loginHint: String? = null,
         additionalParams: Map<String, String>
     ) {
         val verifier =
@@ -261,10 +263,14 @@ class KindeSDK(
                 }
             )
 
+        // Extract and set login_hint if it's provided in additionalParams and is not empty.
+        loginHint?.takeIf { it.isNotEmpty() }?.let {
+            authRequestBuilder.setLoginHint(it)
+        }
+
         val authRequest = authRequestBuilder
             .setNonce(null)
             .setScopes(scopes)
-            .setLoginHint(LOGIN_HINT)
             .build()
         val authIntent = authService.getAuthorizationRequestIntent(authRequest)
         launcher.launch(authIntent)
