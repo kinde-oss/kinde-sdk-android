@@ -8,6 +8,7 @@ import au.kinde.sdk.model.TokenType
 import au.kinde.sdk.model.UserDetails
 import org.json.JSONObject
 import kotlin.reflect.KClass
+import android.util.Log
 
 /**
  * @author roman
@@ -123,6 +124,7 @@ object ClaimDelegate : ClaimApi {
                     else -> null
                 }
             } else {
+                Log.w("KindeClaim","The claimed value of \"$claim\" does not exist in your token")
                 null
             }
         }
