@@ -220,10 +220,6 @@ class KindeSDK(
             .build()
         val endSessionIntent = authService.getEndSessionRequestIntent(endSessionRequest)
         endTokenLauncher.launch(endSessionIntent)
-
-        apiClient.setBearerToken("")
-        sdkListener.onLogout()
-        store.clearState()
     }
 
     fun isAuthenticated() = state.isAuthorized && checkToken()
