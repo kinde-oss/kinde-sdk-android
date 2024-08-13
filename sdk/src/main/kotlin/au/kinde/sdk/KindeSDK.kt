@@ -4,8 +4,8 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.util.Base64.URL_SAFE
 import android.util.Base64.decode
+import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
 import au.kinde.sdk.api.* // ktlint-disable no-wildcard-imports
 import au.kinde.sdk.api.model.* // ktlint-disable no-wildcard-imports
 import au.kinde.sdk.infrastructure.ApiClient
@@ -44,7 +44,7 @@ import kotlin.concurrent.thread
  * @since 1.0
  */
 class KindeSDK(
-    activity: AppCompatActivity,
+    activity: ComponentActivity,
     private val loginRedirect: String,
     private val logoutRedirect: String,
     private val scopes: List<String> = DEFAULT_SCOPES,
@@ -64,12 +64,12 @@ class KindeSDK(
     ) { result ->
         val data = result.data
 
-        if (result.resultCode == AppCompatActivity.RESULT_CANCELED && data != null) {
+        if (result.resultCode == ComponentActivity.RESULT_CANCELED && data != null) {
             val ex = AuthorizationException.fromIntent(data)
             ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
         }
 
-        if (result.resultCode == AppCompatActivity.RESULT_OK && data != null) {
+        if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
             val resp = AuthorizationResponse.fromIntent(data)
             val ex = AuthorizationException.fromIntent(data)
             state.update(resp, ex)
@@ -87,7 +87,7 @@ class KindeSDK(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val data = result.data
-        if (result.resultCode == AppCompatActivity.RESULT_OK && data != null) {
+        if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
             val resp = EndSessionResponse.fromIntent(data)
             val ex = AuthorizationException.fromIntent(data)
             apiClient.setBearerToken("")
