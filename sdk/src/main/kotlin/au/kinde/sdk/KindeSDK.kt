@@ -195,11 +195,14 @@ class KindeSDK(
         login(type, orgCode, loginHint, mapOf())
     }
 
-    fun register(type: GrantType? = null, orgCode: String? = null, loginHint: String? = null) {
-        login(type, orgCode, loginHint, mapOf(REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE))
+    fun register(type: GrantType? = null, orgCode: String? = null, loginHint: String? = null, pricing_table_key: String? = null, planInterest: String? = null) {
+        login(type, orgCode, loginHint, mapOf(
+            REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE,
+            PRICING_TABLE_KEY_PARAM_NAME to (pricing_table_key ?: ""),
+            PLAN_INTEREST_PARAM_NAME to (planInterest ?: "")
     }
 
-    fun createOrg(type: GrantType? = null, orgName: String) {
+    fun createOrg(type: GrantType? = null, orgName: String, pricingTableKey: String? = null, planInterest: String? = null) {
         login(
             type,
             null,
@@ -207,7 +210,9 @@ class KindeSDK(
             mapOf(
                 REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE,
                 CREATE_ORG_PARAM_NAME to true.toString(),
-                ORG_NAME_PARAM_NAME to orgName
+                ORG_NAME_PARAM_NAME to orgName,
+                PRICING_TABLE_KEY_PARAM_NAME to (pricingTableKey ?: ""),
+                PLAN_INTEREST_PARAM_NAME to (planInterest ?: ""
             )
         )
     }
@@ -373,6 +378,8 @@ class KindeSDK(
         private const val CREATE_ORG_PARAM_NAME = "is_create_org"
         private const val ORG_NAME_PARAM_NAME = "org_name "
         private const val ORG_CODE_PARAM_NAME = "org_code"
+        private const val PRICING_TABLE_KEY_PARAM_NAME = "pricing_table_key"
+        private const val PLAN_INTEREST_PARAM_NAME = "plan_interest"
         private const val REDIRECT_PARAM_NAME = "redirect"
 
         private const val HTTPS = "https://%s/"
