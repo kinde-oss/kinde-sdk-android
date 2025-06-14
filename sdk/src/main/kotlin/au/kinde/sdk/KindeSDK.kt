@@ -195,25 +195,47 @@ class KindeSDK(
         login(type, orgCode, loginHint, mapOf())
     }
 
-    fun register(type: GrantType? = null, orgCode: String? = null, loginHint: String? = null, pricing_table_key: String? = null, planInterest: String? = null) {
-        login(type, orgCode, loginHint, mapOf(
-            REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE,
-            PRICING_TABLE_KEY_PARAM_NAME to (pricing_table_key ?: ""),
-            PLAN_INTEREST_PARAM_NAME to (planInterest ?: "")
+    fun register(
+        type: GrantType? = null,
+        orgCode: String? = null,
+        loginHint: String? = null,
+        pricing_table_key: String? = null,
+        planInterest: String? = null
+    ) {
+        val params = mutableMapOf<String, String>(
+            REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE
+        )
+        if (!pricing_table_key.isNullOrBlank()) {
+            params[PRICING_TABLE_KEY_PARAM_NAME] = pricing_table_key
+        }
+        if (!planInterest.isNullOrBlank()) {
+            params[PLAN_INTEREST_PARAM_NAME] = planInterest
+        }
+        login(type, orgCode, loginHint, params)
     }
 
-    fun createOrg(type: GrantType? = null, orgName: String, pricingTableKey: String? = null, planInterest: String? = null) {
+    fun createOrg(
+        type: GrantType? = null,
+        orgName: String,
+        pricingTableKey: String? = null,
+        planInterest: String? = null
+    ) {
+        val params = mutableMapOf<String, String>(
+            REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE,
+            CREATE_ORG_PARAM_NAME to true.toString(),
+            ORG_NAME_PARAM_NAME to orgName
+        )
+        if (!pricingTableKey.isNullOrBlank()) {
+            params[PRICING_TABLE_KEY_PARAM_NAME] = pricingTableKey
+        }
+        if (!planInterest.isNullOrBlank()) {
+            params[PLAN_INTEREST_PARAM_NAME] = planInterest
+        }
         login(
             type,
             null,
             null,
-            mapOf(
-                REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE,
-                CREATE_ORG_PARAM_NAME to true.toString(),
-                ORG_NAME_PARAM_NAME to orgName,
-                PRICING_TABLE_KEY_PARAM_NAME to (pricingTableKey ?: ""),
-                PLAN_INTEREST_PARAM_NAME to (planInterest ?: ""
-            )
+            params
         )
     }
 
