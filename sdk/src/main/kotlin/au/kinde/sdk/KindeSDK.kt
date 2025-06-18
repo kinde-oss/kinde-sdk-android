@@ -371,7 +371,7 @@ class KindeSDK(
         private const val REGISTRATION_PAGE_PARAM_VALUE = "registration"
         private const val AUDIENCE_PARAM_NAME = "audience"
         private const val CREATE_ORG_PARAM_NAME = "is_create_org"
-        private const val ORG_NAME_PARAM_NAME = "org_name "
+        private const val ORG_NAME_PARAM_NAME = "org_name"
         private const val ORG_CODE_PARAM_NAME = "org_code"
         private const val REDIRECT_PARAM_NAME = "redirect"
 
