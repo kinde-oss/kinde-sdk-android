@@ -8,6 +8,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import au.kinde.sdk.api.* // ktlint-disable no-wildcard-imports
 import au.kinde.sdk.api.model.* // ktlint-disable no-wildcard-imports
+import au.kinde.sdk.api.model.entitlements.EntitlementResponse
+import au.kinde.sdk.api.model.entitlements.EntitlementsResponse
 import au.kinde.sdk.infrastructure.ApiClient
 import au.kinde.sdk.keys.Keys
 import au.kinde.sdk.keys.KeysApi
@@ -18,6 +20,7 @@ import au.kinde.sdk.token.TokenRepository
 import au.kinde.sdk.utils.ClaimApi
 import au.kinde.sdk.utils.ClaimDelegate
 import au.kinde.sdk.utils.TokenProvider
+import au.kinde.sdk.utils.callApi
 import com.google.gson.Gson
 import net.openid.appauth.AuthState
 import net.openid.appauth.AuthorizationException
@@ -39,10 +42,6 @@ import java.security.Signature
 import java.security.spec.RSAPublicKeySpec
 import kotlin.concurrent.thread
 
-/**
- * @author roman
- * @since 1.0
- */
 class KindeSDK(
     activity: ComponentActivity,
     private val loginRedirect: String,
@@ -228,6 +227,10 @@ class KindeSDK(
 
     fun getUserProfileV2(): UserProfileV2? = callApi(oAuthApi.getUserProfileV2())
 
+    fun getEntitlement(): EntitlementResponse? = callApi(oAuthApi.getEntitlement())
+
+    fun getEntitlements(): EntitlementsResponse? = callApi(oAuthApi.getEntitlements())
+
     fun createUser(createUserRequest: CreateUserRequest? = null): CreateUser200Response? = callApi(usersApi.createUser(createUserRequest))
 
     fun getUsers(sort: kotlin.String? = null, pageSize: kotlin.Int? = null, userId: kotlin.Int? = null, nextToken: kotlin.String? = null): kotlin.collections.List<User>? = callApi(usersApi.getUsers(sort, pageSize, userId, nextToken))
@@ -347,11 +350,25 @@ class KindeSDK(
     private fun isTokenExpired(tokenType: TokenType): Boolean {
         val expClaim = getClaim("exp", tokenType)
         if (expClaim.value != null) {
-            val expireEpochMillis = (expClaim.value as Long) * 1000
-            val currentTimeMillis = System.currentTimeMillis()
+            try {
+                // Safely convert the expiry claim to Long, handling both String and Long types
+                val expirySeconds = when (val value = expClaim.value) {
+                    is Long -> value
+                    is Int -> value.toLong()
+                    is String -> value.toLongOrNull() ?: return false
+                    is Double -> value.toLong()
+                    else -> return false
+                }
+                
+                val expireEpochMillis = expirySeconds * 1000
+                val currentTimeMillis = System.currentTimeMillis()
 
-            if (currentTimeMillis > expireEpochMillis) {
-                return true
+                if (currentTimeMillis > expireEpochMillis) {
+                    return true
+                }
+            } catch (e: Exception) {
+                // If we can't parse the expiry, assume token is valid to avoid breaking the app
+                return false
             }
         }
         return false
