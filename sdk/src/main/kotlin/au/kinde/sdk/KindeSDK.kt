@@ -6,8 +6,9 @@ import android.util.Base64.URL_SAFE
 import android.util.Base64.decode
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
-import au.kinde.sdk.api.* // ktlint-disable no-wildcard-imports
-import au.kinde.sdk.api.model.* // ktlint-disable no-wildcard-imports
+import au.kinde.sdk.api.OAuthApi
+import au.kinde.sdk.api.UsersApi
+import au.kinde.sdk.api.model.*
 import au.kinde.sdk.api.model.entitlements.EntitlementResponse
 import au.kinde.sdk.api.model.entitlements.EntitlementsResponse
 import au.kinde.sdk.infrastructure.ApiClient
@@ -22,17 +23,7 @@ import au.kinde.sdk.utils.ClaimDelegate
 import au.kinde.sdk.utils.TokenProvider
 import au.kinde.sdk.utils.callApi
 import com.google.gson.Gson
-import net.openid.appauth.AuthState
-import net.openid.appauth.AuthorizationException
-import net.openid.appauth.AuthorizationRequest
-import net.openid.appauth.AuthorizationResponse
-import net.openid.appauth.AuthorizationService
-import net.openid.appauth.AuthorizationServiceConfiguration
-import net.openid.appauth.CodeVerifierUtil
-import net.openid.appauth.EndSessionRequest
-import net.openid.appauth.EndSessionResponse
-import net.openid.appauth.ResponseTypeValues
-import net.openid.appauth.TokenRequest
+import net.openid.appauth.*
 import retrofit2.Call
 import retrofit2.Callback
 import retrofit2.Response
@@ -231,9 +222,15 @@ class KindeSDK(
 
     fun getEntitlements(): EntitlementsResponse? = callApi(oAuthApi.getEntitlements())
 
-    fun createUser(createUserRequest: CreateUserRequest? = null): CreateUser200Response? = callApi(usersApi.createUser(createUserRequest))
+    fun createUser(createUserRequest: CreateUserRequest? = null): CreateUser200Response? =
+        callApi(usersApi.createUser(createUserRequest))
 
-    fun getUsers(sort: kotlin.String? = null, pageSize: kotlin.Int? = null, userId: kotlin.Int? = null, nextToken: kotlin.String? = null): kotlin.collections.List<User>? = callApi(usersApi.getUsers(sort, pageSize, userId, nextToken))
+    fun getUsers(
+        sort: kotlin.String? = null,
+        pageSize: kotlin.Int? = null,
+        userId: kotlin.Int? = null,
+        nextToken: kotlin.String? = null
+    ): kotlin.collections.List<User>? = callApi(usersApi.getUsers(sort, pageSize, userId, nextToken))
 
     private fun login(
         type: GrantType? = null,
@@ -350,24 +347,24 @@ class KindeSDK(
     private fun isTokenExpired(tokenType: TokenType): Boolean {
         val expClaim = getClaim("exp", tokenType)
         if (expClaim.value != null) {
+
             try {
-                // Safely convert the expiry claim to Long, handling both String and Long types
+                // Safely convert the expiry claim to seconds since epoch
                 val expirySeconds = when (val value = expClaim.value) {
-                    is Long -> value
-                    is Int -> value.toLong()
+                    is Number -> value.toLong()
                     is String -> value.toLongOrNull() ?: return false
-                    is Double -> value.toLong()
                     else -> return false
                 }
-                
+
                 val expireEpochMillis = expirySeconds * 1000
                 val currentTimeMillis = System.currentTimeMillis()
-
-                if (currentTimeMillis > expireEpochMillis) {
+                val skewMs = 60_000L // 60s skew
+                if (currentTimeMillis + skewMs >= expireEpochMillis) {
                     return true
                 }
             } catch (e: Exception) {
                 // If we can't parse the expiry, assume token is valid to avoid breaking the app
+                android.util.Log.w("KindeSDK", "Failed to parse 'exp' claim; treating token as valid", e)
                 return false
             }
         }
