@@ -38,6 +38,7 @@ import java.security.KeyFactory
 import java.security.Signature
 import java.security.spec.RSAPublicKeySpec
 import kotlin.concurrent.thread
+import androidx.core.net.toUri
 
 /**
  * @author roman
@@ -199,14 +200,14 @@ class KindeSDK(
         type: GrantType? = null,
         orgCode: String? = null,
         loginHint: String? = null,
-        pricing_table_key: String? = null,
+        pricingTableKey: String? = null,
         planInterest: String? = null
     ) {
         val params = mutableMapOf<String, String>(
             REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE
         )
-        if (!pricing_table_key.isNullOrBlank()) {
-            params[PRICING_TABLE_KEY_PARAM_NAME] = pricing_table_key
+        if (!pricingTableKey.isNullOrBlank()) {
+            params[PRICING_TABLE_KEY_PARAM_NAME] = pricingTableKey
         }
         if (!planInterest.isNullOrBlank()) {
             params[PLAN_INTEREST_PARAM_NAME] = planInterest
@@ -241,7 +242,7 @@ class KindeSDK(
 
     fun logout() {
         val endSessionRequest = EndSessionRequest.Builder(serviceConfiguration)
-            .setPostLogoutRedirectUri(Uri.parse(logoutRedirect))
+            .setPostLogoutRedirectUri(logoutRedirect.toUri())
             .setAdditionalParameters(mapOf(REDIRECT_PARAM_NAME to logoutRedirect))
             .setState(null)
             .build()
@@ -398,7 +399,7 @@ class KindeSDK(
         private const val REGISTRATION_PAGE_PARAM_VALUE = "registration"
         private const val AUDIENCE_PARAM_NAME = "audience"
         private const val CREATE_ORG_PARAM_NAME = "is_create_org"
-        private const val ORG_NAME_PARAM_NAME = "org_name "
+        private const val ORG_NAME_PARAM_NAME = "org_name"
         private const val ORG_CODE_PARAM_NAME = "org_code"
         private const val PRICING_TABLE_KEY_PARAM_NAME = "pricing_table_key"
         private const val PLAN_INTEREST_PARAM_NAME = "plan_interest"
