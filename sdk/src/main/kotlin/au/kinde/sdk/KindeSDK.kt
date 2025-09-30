@@ -217,14 +217,14 @@ class KindeSDK(
 
     fun createOrg(
         type: GrantType? = null,
-        orgName: String,
+        orgCode: String,
         pricingTableKey: String? = null,
         planInterest: String? = null
     ) {
         val params = mutableMapOf<String, String>(
             REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE,
             CREATE_ORG_PARAM_NAME to true.toString(),
-            ORG_NAME_PARAM_NAME to orgName
+            ORG_NAME_PARAM_NAME to orgCode
         )
         if (!pricingTableKey.isNullOrBlank()) {
             params[PRICING_TABLE_KEY_PARAM_NAME] = pricingTableKey
