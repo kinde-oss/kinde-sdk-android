@@ -437,7 +437,6 @@ class KindeSDK(
 
         val expireEpochSeconds = getExpireEpochSeconds(TokenType.ACCESS_TOKEN)
         if (expireEpochSeconds == null) {
-            android.util.Log.w(TAG, "Unable to schedule token refresh: token expiration not available")
             return
         }
 
@@ -510,8 +509,6 @@ class KindeSDK(
     }
 
     companion object {
-        private const val TAG = "KindeSDK"
-
         private const val DOMAIN_KEY = "au.kinde.domain"
         private const val CLIENT_ID_KEY = "au.kinde.clientId"
         private const val AUDIENCE_KEY = "audience"
