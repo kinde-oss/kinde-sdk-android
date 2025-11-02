@@ -5,11 +5,6 @@ import net.openid.appauth.AuthState
 import retrofit2.Call
 import java.net.HttpURLConnection
 
-/**
- * @author roman
- * @since 1.0
- */
-
 fun <T> Call<T>.callApi(
     state: AuthState,
     withoutAuthorization: Boolean = false,

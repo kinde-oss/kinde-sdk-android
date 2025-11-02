@@ -4,10 +4,12 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.util.Base64.URL_SAFE
 import android.util.Base64.decode
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
-import au.kinde.sdk.api.* // ktlint-disable no-wildcard-imports
-import au.kinde.sdk.api.model.* // ktlint-disable no-wildcard-imports
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
 import au.kinde.sdk.infrastructure.ApiClient
 import au.kinde.sdk.keys.Keys
 import au.kinde.sdk.keys.KeysApi
@@ -39,18 +41,21 @@ import java.security.Signature
 import java.security.spec.RSAPublicKeySpec
 import kotlin.concurrent.thread
 import androidx.core.net.toUri
+import au.kinde.sdk.api.OAuthApi
+import au.kinde.sdk.api.UsersApi
+import au.kinde.sdk.api.model.CreateUser200Response
+import au.kinde.sdk.api.model.CreateUserRequest
+import au.kinde.sdk.api.model.User
+import au.kinde.sdk.api.model.UserProfile
+import au.kinde.sdk.api.model.UserProfileV2
 
-/**
- * @author roman
- * @since 1.0
- */
 class KindeSDK(
     activity: ComponentActivity,
     private val loginRedirect: String,
     private val logoutRedirect: String,
     private val scopes: List<String> = DEFAULT_SCOPES,
     private val sdkListener: SDKListener
-) : TokenProvider, ClaimApi by ClaimDelegate {
+) : TokenProvider, ClaimApi by ClaimDelegate, DefaultLifecycleObserver {
 
     private val gson = Gson()
 
@@ -109,7 +114,16 @@ class KindeSDK(
     private val oAuthApi: OAuthApi
     private val usersApi: UsersApi
 
+    private val tokenRefreshHandler = Handler(Looper.getMainLooper())
+    private var tokenRefreshRunnable: Runnable? = null
+    private var isPaused = false
+    private var lastTokenUpdateTime = 0L
+    private val refreshLock = Any()
+    @Volatile
+    private var isRefreshing = false
+
     init {
+        activity.lifecycle.addObserver(this)
         val appInfo = activity.packageManager.getApplicationInfo(
             activity.packageName,
             PackageManager.GET_META_DATA
@@ -181,6 +195,7 @@ class KindeSDK(
                 state.accessToken?.let { accessToken ->
                     apiClient.setBearerToken(accessToken)
                     sdkListener.onNewToken(accessToken)
+                    scheduleTokenRefresh()
                 }
             }
         } else {
@@ -191,6 +206,8 @@ class KindeSDK(
 
     override fun getToken(tokenType: TokenType): String? =
         if (tokenType == TokenType.ACCESS_TOKEN) state.accessToken else state.idToken
+
+    fun getRefreshToken(): String? = state.refreshToken
 
     fun login(type: GrantType? = null, orgCode: String? = null, loginHint: String? = null) {
         login(type, orgCode, loginHint, mapOf())
@@ -241,6 +258,7 @@ class KindeSDK(
     }
 
     fun logout() {
+        cancelTokenRefresh()
         val endSessionRequest = EndSessionRequest.Builder(serviceConfiguration)
             .setPostLogoutRedirectUri(logoutRedirect.toUri())
             .setAdditionalParameters(mapOf(REDIRECT_PARAM_NAME to logoutRedirect))
@@ -300,30 +318,61 @@ class KindeSDK(
         launcher.launch(authIntent)
     }
 
-    private fun getToken(tokenRequest: TokenRequest): Boolean {
+    private fun getToken(tokenRequest: TokenRequest, notifyListener: Boolean = true): Boolean {
+        val grantType = tokenRequest.grantType
+
+        // For refresh token requests, use synchronized block to prevent concurrent refreshes
+        if (grantType == "refresh_token") {
+            synchronized(refreshLock) {
+                if (isRefreshing) {
+                    return true // Return true to indicate no error
+                }
+                isRefreshing = true
+            }
+        }
+
         val (resp, ex) = tokenRepository.getToken(
             authState = state,
             tokenRequest = tokenRequest
         )
+
         if (resp != null) {
             val tokenNotExists = state.accessToken.isNullOrEmpty()
             state.update(resp, ex)
             apiClient.setBearerToken(state.accessToken.orEmpty())
             store.saveState(state.jsonSerializeString())
-            if (tokenNotExists) {
+            lastTokenUpdateTime = System.currentTimeMillis()
+
+            if (notifyListener && (tokenNotExists || !state.accessToken.isNullOrEmpty())) {
                 sdkListener.onNewToken(state.accessToken.orEmpty())
             }
+
+            // Always schedule the next refresh after successful token operation
+            scheduleTokenRefresh()
+            isRefreshing = false
         } else {
+            // Check if this is a 401/invalid_grant error (invalid refresh token)
+            val isInvalidRefreshToken = ex?.let { exception ->
+                val is401 = exception.message?.contains("401") == true
+                val isInvalidGrant = exception.error == "invalid_grant"
+                is401 || isInvalidGrant
+            } ?: false
+
             ex?.let { sdkListener.onException(TokenException("${ex.error} ${ex.errorDescription}")) }
-            logout()
+
+            // Always logout on invalid refresh token (401/invalid_grant)
+            // For other errors, only logout if notifyListener is true (manual refresh)
+            if (isInvalidRefreshToken || notifyListener) {
+                logout()
+            }
+            isRefreshing = false
         }
         return resp != null
     }
 
     private fun checkToken(): Boolean {
-        if (isTokenExpired(TokenType.ACCESS_TOKEN)) {
-            getToken(state.createTokenRefreshRequest())
-        }
+        // checkToken should only verify token signature, not trigger refresh
+        // Token refresh is handled automatically by scheduleTokenRefresh()
         if (state.isAuthorized) {
             store.getKeys()?.let { keysString ->
                 try {
@@ -362,7 +411,8 @@ class KindeSDK(
         }
         if (exception != null) {
             if (exception is TokenExpiredException) {
-                if (getToken(state.createTokenRefreshRequest())) {
+                // Use notifyListener=false to prevent logout on API call token refresh
+                if (getToken(state.createTokenRefreshRequest(), notifyListener = false)) {
                     return callApi(call.clone(), refreshed = true)
                 }
             } else {
@@ -372,20 +422,96 @@ class KindeSDK(
         return null
     }
 
-    private fun isTokenExpired(tokenType: TokenType): Boolean {
+    private fun getExpireEpochSeconds(tokenType: TokenType): Long? {
         val expClaim = getClaim("exp", tokenType)
-        if (expClaim.value != null) {
-            val expireEpochMillis = (expClaim.value as Long) * 1000
-            val currentTimeMillis = System.currentTimeMillis()
-
-            if (currentTimeMillis > expireEpochMillis) {
-                return true
-            }
+        return when (val value = expClaim.value) {
+            is Long -> value
+            is String -> value.toLongOrNull()
+            is Number -> value.toLong()
+            else -> null
         }
-        return false
+    }
+
+    private fun scheduleTokenRefresh() {
+        cancelTokenRefresh()
+
+        val expireEpochSeconds = getExpireEpochSeconds(TokenType.ACCESS_TOKEN)
+        if (expireEpochSeconds == null) {
+            android.util.Log.w(TAG, "Unable to schedule token refresh: token expiration not available")
+            return
+        }
+
+        val expireEpochMillis = expireEpochSeconds * 1000
+        val refreshTimeMillis = expireEpochMillis - TOKEN_REFRESH_BUFFER_MS
+        val currentTimeMillis = System.currentTimeMillis()
+        val delayMillis = refreshTimeMillis - currentTimeMillis
+
+        if (delayMillis > 0) {
+            tokenRefreshRunnable = Runnable {
+                thread {
+                    // Use notifyListener=false to prevent logout on automatic refresh failure
+                    val success = getToken(state.createTokenRefreshRequest(), notifyListener = false)
+                    if (!success) {
+                        // Schedule retry after 1 minute if refresh failed
+                        tokenRefreshHandler.postDelayed({
+                            thread {
+                                getToken(state.createTokenRefreshRequest(), notifyListener = false)
+                            }
+                        }, 60_000L)
+                    }
+                }
+            }
+            tokenRefreshHandler.postDelayed(tokenRefreshRunnable!!, delayMillis)
+        } else {
+            // Token expiration not extended or already in buffer window
+            // Schedule refresh for 1 minute from now to try again
+            tokenRefreshRunnable = Runnable {
+                thread {
+                    val success = getToken(state.createTokenRefreshRequest(), notifyListener = false)
+                    if (!success) {
+                        tokenRefreshHandler.postDelayed({
+                            thread {
+                                getToken(state.createTokenRefreshRequest(), notifyListener = false)
+                            }
+                        }, 60_000L)
+                    }
+                }
+            }
+            tokenRefreshHandler.postDelayed(tokenRefreshRunnable!!, 60_000L)
+        }
+    }
+
+    private fun cancelTokenRefresh() {
+        tokenRefreshRunnable?.let { tokenRefreshHandler.removeCallbacks(it) }
+        tokenRefreshRunnable = null
+    }
+
+    override fun onPause(owner: LifecycleOwner) {
+        super.onPause(owner)
+        isPaused = true
+        // Cancel scheduled refresh when app goes to background to save battery
+        cancelTokenRefresh()
+    }
+
+    override fun onResume(owner: LifecycleOwner) {
+        super.onResume(owner)
+        isPaused = false
+        // Check if token needs refresh and reschedule when app comes to foreground
+        if (state.isAuthorized) {
+            scheduleTokenRefresh()
+        }
+    }
+
+    override fun onDestroy(owner: LifecycleOwner) {
+        super.onDestroy(owner)
+        // Clean up resources
+        cancelTokenRefresh()
+        authService.dispose()
     }
 
     companion object {
+        private const val TAG = "KindeSDK"
+
         private const val DOMAIN_KEY = "au.kinde.domain"
         private const val CLIENT_ID_KEY = "au.kinde.clientId"
         private const val AUDIENCE_KEY = "audience"
@@ -409,5 +535,6 @@ class KindeSDK(
         private const val BEARER_AUTH = "kindeBearerAuth"
         private const val LOGIN_HINT = "jdoe@user.example.com"
         private val DEFAULT_SCOPES = listOf("openid", "offline", "email", "profile")
+        private const val TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000L // 5 minutes
     }
 }
