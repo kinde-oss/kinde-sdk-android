@@ -56,7 +56,7 @@ data class FeatureFlagsResponse(
                 "Integer" -> FlagType.Integer
                 else -> {
                     android.util.Log.w("KindeSDK", "Unknown flag type '${item.type}' for flag '$key'")
-                    null
+                    return@mapNotNull null
                 }
             }
             key to Flag(key, flagType, value, false)
