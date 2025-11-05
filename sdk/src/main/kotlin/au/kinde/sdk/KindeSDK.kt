@@ -39,11 +39,9 @@ import java.security.Signature
 import java.security.spec.RSAPublicKeySpec
 import kotlin.concurrent.thread
 import androidx.core.net.toUri
+import au.kinde.sdk.model.ClaimData
+import au.kinde.sdk.model.Flag
 
-/**
- * @author roman
- * @since 1.0
- */
 class KindeSDK(
     activity: ComponentActivity,
     private val loginRedirect: String,
@@ -108,6 +106,9 @@ class KindeSDK(
     private val keysApi: KeysApi
     private val oAuthApi: OAuthApi
     private val usersApi: UsersApi
+    private val permissionsApi: PermissionsApi
+    private val rolesApi: RolesApi
+    private val featureFlagsApi: FeatureFlagsApi
 
     init {
         val appInfo = activity.packageManager.getApplicationInfo(
@@ -139,10 +140,10 @@ class KindeSDK(
         }
 
         serviceConfiguration = AuthorizationServiceConfiguration(
-            Uri.parse(AUTH_URL.format(domain)),
-            Uri.parse(TOKEN_URL.format(domain)),
+            AUTH_URL.format(domain).toUri(),
+            TOKEN_URL.format(domain).toUri(),
             null,
-            Uri.parse(LOGOUT_URL.format(domain))
+            LOGOUT_URL.format(domain).toUri()
         )
 
         store = Store(activity, domain)
@@ -161,6 +162,9 @@ class KindeSDK(
         keysApi = apiClient.createService(KeysApi::class.java)
         oAuthApi = apiClient.createService(OAuthApi::class.java)
         usersApi = apiClient.createService(UsersApi::class.java)
+        permissionsApi = apiClient.createService(PermissionsApi::class.java)
+        rolesApi = apiClient.createService(RolesApi::class.java)
+        featureFlagsApi = apiClient.createService(FeatureFlagsApi::class.java)
 
         if (store.getKeys().isNullOrEmpty()) {
             keysApi.getKeys().enqueue(object : Callback<Keys> {
@@ -260,6 +264,107 @@ class KindeSDK(
 
     fun getUsers(sort: kotlin.String? = null, pageSize: kotlin.Int? = null, userId: kotlin.Int? = null, nextToken: kotlin.String? = null): kotlin.collections.List<User>? = callApi(usersApi.getUsers(sort, pageSize, userId, nextToken))
 
+    // Permissions with forceApi support
+    fun getPermissions(options: ApiOptions? = null): ClaimData.Permissions {
+        return if (options?.forceApi == true) {
+            val response = callApi(permissionsApi.getPermissions())
+                ?: throw Exception("Failed to fetch permissions from API")
+            val data = response.data
+            ClaimData.Permissions(
+                orgCode = data?.orgCode ?: "",
+                permissions = data?.permissions?.mapNotNull { it.key } ?: emptyList()
+            )
+        } else {
+            ClaimDelegate.getPermissions()
+        }
+    }
+
+    fun getPermission(permission: String, options: ApiOptions? = null): ClaimData.Permission {
+        return if (options?.forceApi == true) {
+            val perms = getPermissions(options)
+            ClaimData.Permission(
+                orgCode = perms.orgCode,
+                isGranted = perms.permissions.contains(permission)
+            )
+        } else {
+            ClaimDelegate.getPermission(permission)
+        }
+    }
+
+    // Roles with forceApi support
+    fun getRoles(options: ApiOptions? = null): ClaimData.Roles {
+        return if (options?.forceApi == true) {
+            val response = callApi(rolesApi.getRoles())
+                ?: throw Exception("Failed to fetch roles from API")
+            val data = response.data
+            ClaimData.Roles(
+                orgCode = data?.orgCode ?: "",
+                roles = data?.roles?.mapNotNull { it.key } ?: emptyList()
+            )
+        } else {
+            ClaimDelegate.getRoles()
+        }
+    }
+
+    fun getRole(role: String, options: ApiOptions? = null): ClaimData.Role {
+        return if (options?.forceApi == true) {
+            val roles = getRoles(options)
+            ClaimData.Role(
+                orgCode = roles.orgCode,
+                isGranted = roles.roles.contains(role)
+            )
+        } else {
+            ClaimDelegate.getRole(role)
+        }
+    }
+
+    // Feature flags with forceApi support
+    fun getBooleanFlag(code: String, defaultValue: Boolean? = null, options: ApiOptions? = null): Boolean? {
+        return if (options?.forceApi == true) {
+            val response = callApi(featureFlagsApi.getFeatureFlags())
+                ?: throw Exception("Failed to fetch feature flags from API")
+            val flags = response.toFlagMap()
+            flags[code]?.value as? Boolean ?: defaultValue
+        } else {
+            ClaimDelegate.getBooleanFlag(code, defaultValue)
+        }
+    }
+
+    fun getStringFlag(code: String, defaultValue: String? = null, options: ApiOptions? = null): String? {
+        return if (options?.forceApi == true) {
+            val response = callApi(featureFlagsApi.getFeatureFlags())
+                ?: throw Exception("Failed to fetch feature flags from API")
+            val flags = response.toFlagMap()
+            flags[code]?.value as? String ?: defaultValue
+        } else {
+            ClaimDelegate.getStringFlag(code, defaultValue)
+        }
+    }
+
+    fun getIntegerFlag(code: String, defaultValue: Int? = null, options: ApiOptions? = null): Int? {
+        return if (options?.forceApi == true) {
+            val response = callApi(featureFlagsApi.getFeatureFlags())
+                ?: throw Exception("Failed to fetch feature flags from API")
+            val flags = response.toFlagMap()
+            (flags[code]?.value as? Number)?.toInt() ?: defaultValue
+        } else {
+            ClaimDelegate.getIntegerFlag(code, defaultValue)
+        }
+    }
+
+    fun getAllFlags(options: ApiOptions? = null): Map<String, Flag> {
+        return if (options?.forceApi == true) {
+            val response = callApi(featureFlagsApi.getFeatureFlags())
+                ?: throw Exception("Failed to fetch feature flags from API")
+            android.util.Log.d("KindeSDK", "Feature flags API response: $response")
+            val flags = response.toFlagMap()
+            android.util.Log.d("KindeSDK", "Feature flags map: $flags")
+            flags
+        } else {
+            ClaimDelegate.getAllFlags()
+        }
+    }
+
     private fun login(
         type: GrantType? = null,
         orgCode: String? = null,
@@ -272,7 +377,7 @@ class KindeSDK(
             serviceConfiguration, // the authorization service configuration
             clientId, // the client ID, typically pre-registered and static
             ResponseTypeValues.CODE, // the response_type value: we want a code
-            Uri.parse(loginRedirect)
+            loginRedirect.toUri()
         )
             .setCodeVerifier(verifier)
             .setAdditionalParameters(
@@ -375,7 +480,13 @@ class KindeSDK(
     private fun isTokenExpired(tokenType: TokenType): Boolean {
         val expClaim = getClaim("exp", tokenType)
         if (expClaim.value != null) {
-            val expireEpochMillis = (expClaim.value as Long) * 1000
+            val expireEpochMillis = when (val exp = expClaim.value) {
+                is Long -> exp * 1000
+                is Int -> exp.toLong() * 1000
+                is String -> exp.toLong() * 1000
+                is Number -> exp.toLong() * 1000
+                else -> return false
+            }
             val currentTimeMillis = System.currentTimeMillis()
 
             if (currentTimeMillis > expireEpochMillis) {
