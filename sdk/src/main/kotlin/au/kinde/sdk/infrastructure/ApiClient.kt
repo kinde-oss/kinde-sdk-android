@@ -39,16 +39,23 @@ class ApiClient(
 
     private val defaultClientBuilder: OkHttpClient.Builder by lazy {
         OkHttpClient().newBuilder()
-            .addInterceptor { chain ->
-                val request = chain.request()
-                val response = chain.proceed(request)
-                val responseBody = response.body()?.string()
-                android.util.Log.d("ApiClient", "URL: ${request.url()}")
-                android.util.Log.d("ApiClient", "Response code: ${response.code()}")
-                android.util.Log.d("ApiClient", "Response body: $responseBody")
-                response.newBuilder()
-                    .body(okhttp3.ResponseBody.create(response.body()?.contentType(), responseBody ?: ""))
-                    .build()
+            .apply {
+                if (au.kinde.sdk.BuildConfig.DEBUG) {
+                    addInterceptor { chain ->
+                        val request = chain.request()
+                        val response = chain.proceed(request)
+                        val responseBody = response.body()
+                        val contentType = responseBody?.contentType()
+                        val bodyString = responseBody?.string()
+                        android.util.Log.d("ApiClient", "URL: ${request.url()}")
+                        android.util.Log.d("ApiClient", "Response code: ${response.code()}")
+                        // Only log body length, not content, to avoid exposing sensitive data
+                        android.util.Log.d("ApiClient", "Response body length: ${bodyString?.length ?: 0}")
+                        response.newBuilder()
+                            .body(okhttp3.ResponseBody.create(contentType, bodyString ?: ""))
+                            .build()
+                    }
+                }
             }
     }
 

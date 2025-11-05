@@ -264,21 +264,39 @@ class KindeSDK(
 
     fun getUsers(sort: kotlin.String? = null, pageSize: kotlin.Int? = null, userId: kotlin.Int? = null, nextToken: kotlin.String? = null): kotlin.collections.List<User>? = callApi(usersApi.getUsers(sort, pageSize, userId, nextToken))
 
+    /**
+     * Get all permissions for the authenticated user
+     * 
+     * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
+     * @return ClaimData.Permissions containing org code and list of permission keys
+     */
     // Permissions with forceApi support
     fun getPermissions(options: ApiOptions? = null): ClaimData.Permissions {
         return if (options?.forceApi == true) {
             val response = callApi(permissionsApi.getPermissions())
-                ?: throw Exception("Failed to fetch permissions from API")
-            val data = response.data
+                ?: throw Exception("Failed to fetch permissions from API - check network and authentication")
+            if (!response.success) {
+                throw Exception("Permissions API returned success: false")
+            }
             ClaimData.Permissions(
-                orgCode = data?.orgCode ?: "",
-                permissions = data?.permissions?.mapNotNull { it.key } ?: emptyList()
+                orgCode = response.data?.orgCode ?: "",
+                permissions = response.getPermissionKeys()
             )
         } else {
             ClaimDelegate.getPermissions()
         }
     }
 
+    /**
+     * Check if user has a specific permission
+     * 
+     * Note: When using forceApi=true, this fetches ALL permissions from the API.
+     * If checking multiple permissions, call getPermissions() once and check locally for better performance.
+     * 
+     * @param permission The permission key to check
+     * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
+     * @return ClaimData.Permission with orgCode and isGranted status
+     */
     fun getPermission(permission: String, options: ApiOptions? = null): ClaimData.Permission {
         return if (options?.forceApi == true) {
             val perms = getPermissions(options)
@@ -291,21 +309,39 @@ class KindeSDK(
         }
     }
 
+    /**
+     * Get all roles for the authenticated user
+     * 
+     * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
+     * @return ClaimData.Roles containing org code and list of role keys
+     */
     // Roles with forceApi support
     fun getRoles(options: ApiOptions? = null): ClaimData.Roles {
         return if (options?.forceApi == true) {
             val response = callApi(rolesApi.getRoles())
-                ?: throw Exception("Failed to fetch roles from API")
-            val data = response.data
+                ?: throw Exception("Failed to fetch roles from API - check network and authentication")
+            if (!response.success) {
+                throw Exception("Roles API returned success: false")
+            }
             ClaimData.Roles(
-                orgCode = data?.orgCode ?: "",
-                roles = data?.roles?.mapNotNull { it.key } ?: emptyList()
+                orgCode = response.data?.orgCode ?: "",
+                roles = response.getRoleKeys()
             )
         } else {
             ClaimDelegate.getRoles()
         }
     }
 
+    /**
+     * Check if user has a specific role
+     * 
+     * Note: When using forceApi=true, this fetches ALL roles from the API.
+     * If checking multiple roles, call getRoles() once and check locally for better performance.
+     * 
+     * @param role The role key to check
+     * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
+     * @return ClaimData.Role with orgCode and isGranted status
+     */
     fun getRole(role: String, options: ApiOptions? = null): ClaimData.Role {
         return if (options?.forceApi == true) {
             val roles = getRoles(options)
@@ -318,48 +354,120 @@ class KindeSDK(
         }
     }
 
+    /**
+     * Get a boolean feature flag value
+     * 
+     * Note: When using forceApi=true, this fetches ALL feature flags from the API.
+     * If checking multiple flags, call getAllFlags() once and check locally for better performance.
+     * 
+     * @param code The flag code/key
+     * @param defaultValue Default value if flag doesn't exist
+     * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
+     * @return The boolean flag value or defaultValue if not found
+     */
     // Feature flags with forceApi support
     fun getBooleanFlag(code: String, defaultValue: Boolean? = null, options: ApiOptions? = null): Boolean? {
         return if (options?.forceApi == true) {
             val response = callApi(featureFlagsApi.getFeatureFlags())
-                ?: throw Exception("Failed to fetch feature flags from API")
+                ?: throw Exception("Failed to fetch feature flags from API - check network and authentication")
+            if (!response.success) {
+                throw Exception("Feature flags API returned success: false")
+            }
             val flags = response.toFlagMap()
-            flags[code]?.value as? Boolean ?: defaultValue
+            val flag = flags[code]
+            when {
+                flag == null -> defaultValue
+                flag.value is Boolean -> flag.value as Boolean
+                else -> {
+                    android.util.Log.w("KindeSDK", "Flag '$code' type mismatch: expected Boolean, got ${flag.type}")
+                    defaultValue
+                }
+            }
         } else {
             ClaimDelegate.getBooleanFlag(code, defaultValue)
         }
     }
 
+    /**
+     * Get a string feature flag value
+     * 
+     * Note: When using forceApi=true, this fetches ALL feature flags from the API.
+     * If checking multiple flags, call getAllFlags() once and check locally for better performance.
+     * 
+     * @param code The flag code/key
+     * @param defaultValue Default value if flag doesn't exist
+     * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
+     * @return The string flag value or defaultValue if not found
+     */
     fun getStringFlag(code: String, defaultValue: String? = null, options: ApiOptions? = null): String? {
         return if (options?.forceApi == true) {
             val response = callApi(featureFlagsApi.getFeatureFlags())
-                ?: throw Exception("Failed to fetch feature flags from API")
+                ?: throw Exception("Failed to fetch feature flags from API - check network and authentication")
+            if (!response.success) {
+                throw Exception("Feature flags API returned success: false")
+            }
             val flags = response.toFlagMap()
-            flags[code]?.value as? String ?: defaultValue
+            val flag = flags[code]
+            when {
+                flag == null -> defaultValue
+                flag.value is String -> flag.value as String
+                else -> {
+                    android.util.Log.w("KindeSDK", "Flag '$code' type mismatch: expected String, got ${flag.type}")
+                    defaultValue
+                }
+            }
         } else {
             ClaimDelegate.getStringFlag(code, defaultValue)
         }
     }
 
+    /**
+     * Get an integer feature flag value
+     * 
+     * Note: When using forceApi=true, this fetches ALL feature flags from the API.
+     * If checking multiple flags, call getAllFlags() once and check locally for better performance.
+     * 
+     * @param code The flag code/key
+     * @param defaultValue Default value if flag doesn't exist
+     * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
+     * @return The integer flag value or defaultValue if not found
+     */
     fun getIntegerFlag(code: String, defaultValue: Int? = null, options: ApiOptions? = null): Int? {
         return if (options?.forceApi == true) {
             val response = callApi(featureFlagsApi.getFeatureFlags())
-                ?: throw Exception("Failed to fetch feature flags from API")
+                ?: throw Exception("Failed to fetch feature flags from API - check network and authentication")
+            if (!response.success) {
+                throw Exception("Feature flags API returned success: false")
+            }
             val flags = response.toFlagMap()
-            (flags[code]?.value as? Number)?.toInt() ?: defaultValue
+            val flag = flags[code]
+            when {
+                flag == null -> defaultValue
+                flag.value is Number -> (flag.value as Number).toInt()
+                else -> {
+                    android.util.Log.w("KindeSDK", "Flag '$code' type mismatch: expected Integer, got ${flag.type}")
+                    defaultValue
+                }
+            }
         } else {
             ClaimDelegate.getIntegerFlag(code, defaultValue)
         }
     }
 
+    /**
+     * Get all feature flags for the authenticated user
+     * 
+     * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
+     * @return Map of flag codes to Flag objects
+     */
     fun getAllFlags(options: ApiOptions? = null): Map<String, Flag> {
         return if (options?.forceApi == true) {
             val response = callApi(featureFlagsApi.getFeatureFlags())
-                ?: throw Exception("Failed to fetch feature flags from API")
-            android.util.Log.d("KindeSDK", "Feature flags API response: $response")
-            val flags = response.toFlagMap()
-            android.util.Log.d("KindeSDK", "Feature flags map: $flags")
-            flags
+                ?: throw Exception("Failed to fetch feature flags from API - check network and authentication")
+            if (!response.success) {
+                throw Exception("Feature flags API returned success: false")
+            }
+            response.toFlagMap()
         } else {
             ClaimDelegate.getAllFlags()
         }

@@ -19,15 +19,38 @@ data class RolesResponse(
     val data: RolesData? = null,
     
     @SerializedName("success")
-    val success: Boolean? = null
-)
+    val success: Boolean = false
+) {
+    /**
+     * Check if the response is valid
+     * @return true if success is true and data is present
+     */
+    fun isValid(): Boolean = success && data != null
+    /**
+     * Extract role keys from the API response
+     * 
+     * @return List of role keys. Roles with null keys are skipped.
+     */
+    fun getRoleKeys(): List<String> {
+        if (!success) {
+            android.util.Log.w("KindeSDK", "Roles API returned success=false")
+            return emptyList()
+        }
+        val roles = this.data?.roles ?: emptyList()
+        val nullKeyCount = roles.count { it.key == null }
+        if (nullKeyCount > 0) {
+            android.util.Log.w("KindeSDK", "Dropping $nullKeyCount role(s) with null keys")
+        }
+        return roles.mapNotNull { it.key }
+    }
+}
 
 data class RolesData(
     @SerializedName("org_code")
     val orgCode: String? = null,
 
     @SerializedName("roles")
-    val roles: List<RoleData>? = null
+    val roles: List<RoleData> = emptyList()
 )
 
 /**
