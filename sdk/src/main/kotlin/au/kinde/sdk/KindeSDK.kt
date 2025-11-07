@@ -105,7 +105,7 @@ class KindeSDK(
     private var tokenRefreshRunnable: Runnable? = null
     private var isPaused = false
     private var lastTokenUpdateTime = 0L
-    private val refreshLock = Any()
+    private val refreshLock = Object()
 
     @Volatile
     private var isRefreshing = false
@@ -318,8 +318,13 @@ class KindeSDK(
         // For refresh token requests, use synchronized block to prevent concurrent refreshes
         if (grantType == "refresh_token") {
             synchronized(refreshLock) {
-                if (isRefreshing) {
-                    return true // Return true to indicate no error
+                while (isRefreshing) {
+                    try {
+                        refreshLock.wait()
+                    } catch (ie: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        return false
+                    }
                 }
                 isRefreshing = true
             }
@@ -343,7 +348,14 @@ class KindeSDK(
 
             // Always schedule the next refresh after successful token operation
             scheduleTokenRefresh()
-            isRefreshing = false
+            if (grantType == "refresh_token") {
+                synchronized(refreshLock) {
+                    isRefreshing = false
+                    refreshLock.notifyAll()
+                }
+            } else {
+                isRefreshing = false
+            }
         } else {
             // Check if this is a 401/invalid_grant error (invalid refresh token)
             val isInvalidRefreshToken = ex?.let { exception ->
@@ -361,7 +373,14 @@ class KindeSDK(
                     logout()
                 }
             } finally {
-                isRefreshing = false
+                if (grantType == "refresh_token") {
+                    synchronized(refreshLock) {
+                        isRefreshing = false
+                        refreshLock.notifyAll()
+                    }
+                } else {
+                    isRefreshing = false
+                }
             }
         }
         return resp != null
@@ -432,6 +451,10 @@ class KindeSDK(
     private fun scheduleTokenRefresh() {
         cancelTokenRefresh()
 
+        if (isPaused) {
+            return
+        }
+
         val expireEpochSeconds = getExpireEpochSeconds(TokenType.ACCESS_TOKEN) ?: return
 
         val expireEpochMillis = expireEpochSeconds * 1000
@@ -441,13 +464,17 @@ class KindeSDK(
 
         val retryDelayMs = 10_000L
 
-        tokenRefreshRunnable = createTokenRefreshRunnable(retryDelayMs)
         if (delayMillis > 0) {
-            tokenRefreshHandler.postDelayed(tokenRefreshRunnable!!, delayMillis)
+            postTokenRefresh(delayMillis, retryDelayMs)
         } else {
             // Token expiration not extended or already in buffer window
-            tokenRefreshHandler.postDelayed(tokenRefreshRunnable!!, retryDelayMs)
+            postTokenRefresh(retryDelayMs, retryDelayMs)
         }
+    }
+
+    private fun postTokenRefresh(delayMillis: Long, retryDelayMs: Long) {
+        tokenRefreshRunnable = createTokenRefreshRunnable(retryDelayMs)
+        tokenRefreshHandler.postDelayed(tokenRefreshRunnable!!, delayMillis)
     }
 
     private fun createTokenRefreshRunnable(retryDelayMs: Long = 10_000L): Runnable {
@@ -455,11 +482,7 @@ class KindeSDK(
             thread {
                 val success = getToken(state.createTokenRefreshRequest(), notifyListener = false)
                 if (!success) {
-                    tokenRefreshHandler.postDelayed({
-                        thread {
-                            getToken(state.createTokenRefreshRequest(), notifyListener = false)
-                        }
-                    }, retryDelayMs)
+                    postTokenRefresh(retryDelayMs, retryDelayMs)
                 }
             }
         }
