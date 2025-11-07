@@ -103,6 +103,8 @@ class KindeSDK(
 
     private val tokenRefreshHandler = Handler(Looper.getMainLooper())
     private var tokenRefreshRunnable: Runnable? = null
+
+    @Volatile
     private var isPaused = false
     private var lastTokenUpdateTime = 0L
     private val refreshLock = Object()
@@ -370,7 +372,11 @@ class KindeSDK(
             // For other errors, only logout if notifyListener is true (manual refresh)
             try {
                 if (isInvalidRefreshToken || notifyListener) {
-                    logout()
+                    if (Looper.myLooper() == Looper.getMainLooper()) {
+                        logout()
+                    } else {
+                        tokenRefreshHandler.post { logout() }
+                    }
                 }
             } finally {
                 if (grantType == "refresh_token") {
@@ -467,8 +473,8 @@ class KindeSDK(
         if (delayMillis > 0) {
             postTokenRefresh(delayMillis, retryDelayMs)
         } else {
-            // Token expiration not extended or already in buffer window
-            postTokenRefresh(retryDelayMs, retryDelayMs)
+            // Already inside the buffer window — refresh right away
+            postTokenRefresh(0L, retryDelayMs)
         }
     }
 
