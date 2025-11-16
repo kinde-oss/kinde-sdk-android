@@ -13,7 +13,11 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import au.kinde.sdk.api.OAuthApi
 import au.kinde.sdk.api.UsersApi
-import au.kinde.sdk.api.model.*
+import au.kinde.sdk.api.model.CreateUser200Response
+import au.kinde.sdk.api.model.CreateUserRequest
+import au.kinde.sdk.api.model.User
+import au.kinde.sdk.api.model.UserProfile
+import au.kinde.sdk.api.model.UserProfileV2
 import au.kinde.sdk.infrastructure.ApiClient
 import au.kinde.sdk.keys.Keys
 import au.kinde.sdk.keys.KeysApi
@@ -25,7 +29,17 @@ import au.kinde.sdk.utils.ClaimApi
 import au.kinde.sdk.utils.ClaimDelegate
 import au.kinde.sdk.utils.TokenProvider
 import com.google.gson.Gson
-import net.openid.appauth.*
+import net.openid.appauth.AuthState
+import net.openid.appauth.AuthorizationException
+import net.openid.appauth.AuthorizationRequest
+import net.openid.appauth.AuthorizationResponse
+import net.openid.appauth.AuthorizationService
+import net.openid.appauth.AuthorizationServiceConfiguration
+import net.openid.appauth.CodeVerifierUtil
+import net.openid.appauth.EndSessionRequest
+import net.openid.appauth.EndSessionResponse
+import net.openid.appauth.ResponseTypeValues
+import net.openid.appauth.TokenRequest
 import retrofit2.Call
 import retrofit2.Callback
 import retrofit2.Response
@@ -33,7 +47,6 @@ import java.math.BigInteger
 import java.security.KeyFactory
 import java.security.Signature
 import java.security.spec.RSAPublicKeySpec
-import kotlin.compareTo
 import kotlin.concurrent.thread
 
 class KindeSDK(
@@ -160,7 +173,8 @@ class KindeSDK(
 
         apiClient = ApiClient(HTTPS.format(domain), authNames = arrayOf(BEARER_AUTH))
 
-        tokenRepository = TokenRepository(apiClient.createService(TokenApi::class.java), BuildConfig.SDK_VERSION)
+        tokenRepository =
+            TokenRepository(apiClient.createService(TokenApi::class.java), BuildConfig.SDK_VERSION)
 
         keysApi = apiClient.createService(KeysApi::class.java)
         oAuthApi = apiClient.createService(OAuthApi::class.java)
@@ -258,7 +272,9 @@ class KindeSDK(
         endTokenLauncher.launch(endSessionIntent)
     }
 
-    fun isAuthenticated() = state.isAuthorized && checkToken()
+    // this need to rely on shared prefs rather than in-memory object in case initialized in different activities.
+    fun isAuthenticated() = // state.isAuthorized && checkToken()
+        store.getState().isNullOrBlank() == false
 
     fun getUser(): UserProfile? = callApi(oAuthApi.getUser())
 
@@ -272,7 +288,8 @@ class KindeSDK(
         pageSize: kotlin.Int? = null,
         userId: kotlin.Int? = null,
         nextToken: kotlin.String? = null
-    ): kotlin.collections.List<User>? = callApi(usersApi.getUsers(sort, pageSize, userId, nextToken))
+    ): kotlin.collections.List<User>? =
+        callApi(usersApi.getUsers(sort, pageSize, userId, nextToken))
 
     private fun login(
         type: GrantType? = null,
@@ -510,7 +527,7 @@ class KindeSDK(
         super.onResume(owner)
         isPaused = false
         // Check if token needs refresh and reschedule when app comes to foreground
-        if (state.isAuthorized) {
+        if (isAuthenticated()) {
             scheduleTokenRefresh()
         }
     }
