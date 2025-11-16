@@ -273,8 +273,12 @@ class KindeSDK(
     }
 
     // this need to rely on shared prefs rather than in-memory object in case initialized in different activities.
-    fun isAuthenticated() = // state.isAuthorized && checkToken()
-        store.getState().isNullOrBlank() == false
+    fun isAuthenticated(): Boolean {
+        val stateJson = store.getState()
+        if (stateJson.isNullOrBlank()) return false
+        state = AuthState.jsonDeserialize(stateJson)
+        return state.isAuthorized && checkToken()
+    }
 
     fun getUser(): UserProfile? = callApi(oAuthApi.getUser())
 
