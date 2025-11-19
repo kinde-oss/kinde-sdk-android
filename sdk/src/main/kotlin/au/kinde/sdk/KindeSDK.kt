@@ -10,7 +10,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.net.toUri
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
+import au.kinde.sdk.api.ApiOptions
+import au.kinde.sdk.api.FeatureFlagsApi
 import au.kinde.sdk.api.OAuthApi
+import au.kinde.sdk.api.PermissionsApi
+import au.kinde.sdk.api.RolesApi
 import au.kinde.sdk.api.UsersApi
 import au.kinde.sdk.api.model.*
 import au.kinde.sdk.infrastructure.ApiClient
@@ -561,6 +565,8 @@ class KindeSDK(
         if (options.useCache) {
             flagsCache = CacheEntry(flags, System.currentTimeMillis())
         }
+        
+        return flags
     }
 
     private fun login(
