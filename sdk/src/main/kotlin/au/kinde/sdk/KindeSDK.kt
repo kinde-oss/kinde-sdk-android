@@ -110,6 +110,19 @@ class KindeSDK(
     private val rolesApi: RolesApi
     private val featureFlagsApi: FeatureFlagsApi
 
+    // Cache infrastructure for API responses
+    private data class CacheEntry<T>(
+        val data: T,
+        val timestamp: Long
+    )
+
+    @Volatile
+    private var permissionsCache: CacheEntry<ClaimData.Permissions>? = null
+    @Volatile
+    private var rolesCache: CacheEntry<ClaimData.Roles>? = null
+    @Volatile
+    private var flagsCache: CacheEntry<Map<String, Flag>>? = null
+
     init {
         val appInfo = activity.packageManager.getApplicationInfo(
             activity.packageName,
@@ -245,6 +258,7 @@ class KindeSDK(
     }
 
     fun logout() {
+        clearCache()
         val endSessionRequest = EndSessionRequest.Builder(serviceConfiguration)
             .setPostLogoutRedirectUri(logoutRedirect.toUri())
             .setAdditionalParameters(mapOf(REDIRECT_PARAM_NAME to logoutRedirect))
@@ -252,6 +266,17 @@ class KindeSDK(
             .build()
         val endSessionIntent = authService.getEndSessionRequestIntent(endSessionRequest)
         endTokenLauncher.launch(endSessionIntent)
+    }
+
+    /**
+     * Clears all cached API responses (permissions, roles, and feature flags).
+     * Call this when you need to force fresh data on the next API call, or when switching contexts
+     * (e.g., changing organizations).
+     */
+    fun clearCache() {
+        permissionsCache = null
+        rolesCache = null
+        flagsCache = null
     }
 
     fun isAuthenticated() = state.isAuthorized && checkToken()
@@ -267,21 +292,39 @@ class KindeSDK(
     /**
      * Get all permissions for the authenticated user
      * 
-     * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
+     * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API.
+     *                Set useCache = false to bypass cache and force a fresh API call.
      * @return ClaimData.Permissions containing org code and list of permission keys
      */
     // Permissions with forceApi support
     fun getPermissions(options: ApiOptions? = null): ClaimData.Permissions {
         return if (options?.forceApi == true) {
+            // Check cache first if caching is enabled
+            if (options.useCache) {
+                val cached = permissionsCache
+                if (cached != null && System.currentTimeMillis() - cached.timestamp < CACHE_TTL_MS) {
+                    return cached.data
+                }
+            }
+            
+            // Fetch from API
             val response = callApi(permissionsApi.getPermissions())
                 ?: throw Exception("Failed to fetch permissions from API - check network and authentication")
             if (!response.success) {
                 throw Exception("Permissions API returned success: false")
             }
-            ClaimData.Permissions(
+            
+            val permissions = ClaimData.Permissions(
                 orgCode = response.data?.orgCode ?: "",
                 permissions = response.getPermissionKeys()
             )
+            
+            // Cache the result if caching is enabled
+            if (options.useCache) {
+                permissionsCache = CacheEntry(permissions, System.currentTimeMillis())
+            }
+            
+            permissions
         } else {
             ClaimDelegate.getPermissions()
         }
@@ -290,8 +333,9 @@ class KindeSDK(
     /**
      * Check if user has a specific permission
      * 
-     * Note: When using forceApi=true, this fetches ALL permissions from the API.
-     * If checking multiple permissions, call getPermissions() once and check locally for better performance.
+     * Note: When using forceApi=true, this fetches ALL permissions from the API, but results are
+     * cached for 60 seconds by default. Subsequent calls within the cache window will use cached data.
+     * To force a fresh API call, use ApiOptions(forceApi = true, useCache = false).
      * 
      * @param permission The permission key to check
      * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
@@ -312,21 +356,39 @@ class KindeSDK(
     /**
      * Get all roles for the authenticated user
      * 
-     * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
+     * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API.
+     *                Set useCache = false to bypass cache and force a fresh API call.
      * @return ClaimData.Roles containing org code and list of role keys
      */
     // Roles with forceApi support
     fun getRoles(options: ApiOptions? = null): ClaimData.Roles {
         return if (options?.forceApi == true) {
+            // Check cache first if caching is enabled
+            if (options.useCache) {
+                val cached = rolesCache
+                if (cached != null && System.currentTimeMillis() - cached.timestamp < CACHE_TTL_MS) {
+                    return cached.data
+                }
+            }
+            
+            // Fetch from API
             val response = callApi(rolesApi.getRoles())
                 ?: throw Exception("Failed to fetch roles from API - check network and authentication")
             if (!response.success) {
                 throw Exception("Roles API returned success: false")
             }
-            ClaimData.Roles(
+            
+            val roles = ClaimData.Roles(
                 orgCode = response.data?.orgCode ?: "",
                 roles = response.getRoleKeys()
             )
+            
+            // Cache the result if caching is enabled
+            if (options.useCache) {
+                rolesCache = CacheEntry(roles, System.currentTimeMillis())
+            }
+            
+            roles
         } else {
             ClaimDelegate.getRoles()
         }
@@ -335,8 +397,9 @@ class KindeSDK(
     /**
      * Check if user has a specific role
      * 
-     * Note: When using forceApi=true, this fetches ALL roles from the API.
-     * If checking multiple roles, call getRoles() once and check locally for better performance.
+     * Note: When using forceApi=true, this fetches ALL roles from the API, but results are
+     * cached for 60 seconds by default. Subsequent calls within the cache window will use cached data.
+     * To force a fresh API call, use ApiOptions(forceApi = true, useCache = false).
      * 
      * @param role The role key to check
      * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
@@ -357,8 +420,9 @@ class KindeSDK(
     /**
      * Get a boolean feature flag value
      * 
-     * Note: When using forceApi=true, this fetches ALL feature flags from the API.
-     * If checking multiple flags, call getAllFlags() once and check locally for better performance.
+     * Note: When using forceApi=true, this fetches ALL feature flags from the API, but results are
+     * cached for 60 seconds by default. Subsequent calls within the cache window will use cached data.
+     * To force a fresh API call, use ApiOptions(forceApi = true, useCache = false).
      * 
      * @param code The flag code/key
      * @param defaultValue Default value if flag doesn't exist
@@ -368,12 +432,7 @@ class KindeSDK(
     // Feature flags with forceApi support
     fun getBooleanFlag(code: String, defaultValue: Boolean? = null, options: ApiOptions? = null): Boolean? {
         return if (options?.forceApi == true) {
-            val response = callApi(featureFlagsApi.getFeatureFlags())
-                ?: throw Exception("Failed to fetch feature flags from API - check network and authentication")
-            if (!response.success) {
-                throw Exception("Feature flags API returned success: false")
-            }
-            val flags = response.toFlagMap()
+            val flags = fetchFlagsWithCache(options)
             val flag = flags[code]
             when {
                 flag == null -> defaultValue
@@ -391,8 +450,9 @@ class KindeSDK(
     /**
      * Get a string feature flag value
      * 
-     * Note: When using forceApi=true, this fetches ALL feature flags from the API.
-     * If checking multiple flags, call getAllFlags() once and check locally for better performance.
+     * Note: When using forceApi=true, this fetches ALL feature flags from the API, but results are
+     * cached for 60 seconds by default. Subsequent calls within the cache window will use cached data.
+     * To force a fresh API call, use ApiOptions(forceApi = true, useCache = false).
      * 
      * @param code The flag code/key
      * @param defaultValue Default value if flag doesn't exist
@@ -401,12 +461,7 @@ class KindeSDK(
      */
     fun getStringFlag(code: String, defaultValue: String? = null, options: ApiOptions? = null): String? {
         return if (options?.forceApi == true) {
-            val response = callApi(featureFlagsApi.getFeatureFlags())
-                ?: throw Exception("Failed to fetch feature flags from API - check network and authentication")
-            if (!response.success) {
-                throw Exception("Feature flags API returned success: false")
-            }
-            val flags = response.toFlagMap()
+            val flags = fetchFlagsWithCache(options)
             val flag = flags[code]
             when {
                 flag == null -> defaultValue
@@ -424,8 +479,9 @@ class KindeSDK(
     /**
      * Get an integer feature flag value
      * 
-     * Note: When using forceApi=true, this fetches ALL feature flags from the API.
-     * If checking multiple flags, call getAllFlags() once and check locally for better performance.
+     * Note: When using forceApi=true, this fetches ALL feature flags from the API, but results are
+     * cached for 60 seconds by default. Subsequent calls within the cache window will use cached data.
+     * To force a fresh API call, use ApiOptions(forceApi = true, useCache = false).
      * 
      * @param code The flag code/key
      * @param defaultValue Default value if flag doesn't exist
@@ -434,12 +490,7 @@ class KindeSDK(
      */
     fun getIntegerFlag(code: String, defaultValue: Int? = null, options: ApiOptions? = null): Int? {
         return if (options?.forceApi == true) {
-            val response = callApi(featureFlagsApi.getFeatureFlags())
-                ?: throw Exception("Failed to fetch feature flags from API - check network and authentication")
-            if (!response.success) {
-                throw Exception("Feature flags API returned success: false")
-            }
-            val flags = response.toFlagMap()
+            val flags = fetchFlagsWithCache(options)
             val flag = flags[code]
             when {
                 flag == null -> defaultValue
@@ -457,20 +508,45 @@ class KindeSDK(
     /**
      * Get all feature flags for the authenticated user
      * 
-     * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
+     * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API.
+     *                Set useCache = false to bypass cache and force a fresh API call.
      * @return Map of flag codes to Flag objects
      */
     fun getAllFlags(options: ApiOptions? = null): Map<String, Flag> {
         return if (options?.forceApi == true) {
-            val response = callApi(featureFlagsApi.getFeatureFlags())
-                ?: throw Exception("Failed to fetch feature flags from API - check network and authentication")
-            if (!response.success) {
-                throw Exception("Feature flags API returned success: false")
-            }
-            response.toFlagMap()
+            fetchFlagsWithCache(options)
         } else {
             ClaimDelegate.getAllFlags()
         }
+    }
+
+    /**
+     * Helper method to fetch feature flags from API with caching support
+     */
+    private fun fetchFlagsWithCache(options: ApiOptions): Map<String, Flag> {
+        // Check cache first if caching is enabled
+        if (options.useCache) {
+            val cached = flagsCache
+            if (cached != null && System.currentTimeMillis() - cached.timestamp < CACHE_TTL_MS) {
+                return cached.data
+            }
+        }
+        
+        // Fetch from API
+        val response = callApi(featureFlagsApi.getFeatureFlags())
+            ?: throw Exception("Failed to fetch feature flags from API - check network and authentication")
+        if (!response.success) {
+            throw Exception("Feature flags API returned success: false")
+        }
+        
+        val flags = response.toFlagMap()
+        
+        // Cache the result if caching is enabled
+        if (options.useCache) {
+            flagsCache = CacheEntry(flags, System.currentTimeMillis())
+        }
+        
+        return flags
     }
 
     private fun login(
@@ -628,5 +704,8 @@ class KindeSDK(
         private const val BEARER_AUTH = "kindeBearerAuth"
         private const val LOGIN_HINT = "jdoe@user.example.com"
         private val DEFAULT_SCOPES = listOf("openid", "offline", "email", "profile")
+        
+        // Cache configuration
+        private const val CACHE_TTL_MS = 60_000L // 60 seconds
     }
 }
