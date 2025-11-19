@@ -2,6 +2,8 @@ package au.kinde.sdk
 
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.util.Base64.URL_SAFE
 import android.util.Base64.decode
 import androidx.activity.ComponentActivity
@@ -11,6 +13,12 @@ import au.kinde.sdk.api.UsersApi
 import au.kinde.sdk.api.model.*
 import au.kinde.sdk.api.model.entitlements.EntitlementResponse
 import au.kinde.sdk.api.model.entitlements.EntitlementsResponse
+import androidx.core.net.toUri
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import au.kinde.sdk.api.OAuthApi
+import au.kinde.sdk.api.UsersApi
+import au.kinde.sdk.api.model.*
 import au.kinde.sdk.infrastructure.ApiClient
 import au.kinde.sdk.keys.Keys
 import au.kinde.sdk.keys.KeysApi
@@ -31,6 +39,7 @@ import java.math.BigInteger
 import java.security.KeyFactory
 import java.security.Signature
 import java.security.spec.RSAPublicKeySpec
+import kotlin.compareTo
 import kotlin.concurrent.thread
 
 class KindeSDK(
@@ -39,7 +48,7 @@ class KindeSDK(
     private val logoutRedirect: String,
     private val scopes: List<String> = DEFAULT_SCOPES,
     private val sdkListener: SDKListener
-) : TokenProvider, ClaimApi by ClaimDelegate {
+) : TokenProvider, ClaimApi by ClaimDelegate, DefaultLifecycleObserver {
 
     private val gson = Gson()
 
@@ -98,7 +107,19 @@ class KindeSDK(
     private val oAuthApi: OAuthApi
     private val usersApi: UsersApi
 
+    private val tokenRefreshHandler = Handler(Looper.getMainLooper())
+    private var tokenRefreshRunnable: Runnable? = null
+
+    @Volatile
+    private var isPaused = false
+    private var lastTokenUpdateTime = 0L
+    private val refreshLock = Object()
+
+    @Volatile
+    private var isRefreshing = false
+
     init {
+        activity.lifecycle.addObserver(this)
         val appInfo = activity.packageManager.getApplicationInfo(
             activity.packageName,
             PackageManager.GET_META_DATA
@@ -170,6 +191,7 @@ class KindeSDK(
                 state.accessToken?.let { accessToken ->
                     apiClient.setBearerToken(accessToken)
                     sdkListener.onNewToken(accessToken)
+                    scheduleTokenRefresh()
                 }
             }
         } else {
@@ -181,30 +203,60 @@ class KindeSDK(
     override fun getToken(tokenType: TokenType): String? =
         if (tokenType == TokenType.ACCESS_TOKEN) state.accessToken else state.idToken
 
+    fun getRefreshToken(): String? = state.refreshToken
+
     fun login(type: GrantType? = null, orgCode: String? = null, loginHint: String? = null) {
         login(type, orgCode, loginHint, mapOf())
     }
 
-    fun register(type: GrantType? = null, orgCode: String? = null, loginHint: String? = null) {
-        login(type, orgCode, loginHint, mapOf(REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE))
+    fun register(
+        type: GrantType? = null,
+        orgCode: String? = null,
+        loginHint: String? = null,
+        pricingTableKey: String? = null,
+        planInterest: String? = null
+    ) {
+        val params = mutableMapOf<String, String>(
+            REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE
+        )
+        if (!pricingTableKey.isNullOrBlank()) {
+            params[PRICING_TABLE_KEY_PARAM_NAME] = pricingTableKey
+        }
+        if (!planInterest.isNullOrBlank()) {
+            params[PLAN_INTEREST_PARAM_NAME] = planInterest
+        }
+        login(type, orgCode, loginHint, params)
     }
 
-    fun createOrg(type: GrantType? = null, orgName: String) {
+    fun createOrg(
+        type: GrantType? = null,
+        orgName: String,
+        pricingTableKey: String? = null,
+        planInterest: String? = null
+    ) {
+        val params = mutableMapOf<String, String>(
+            REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE,
+            CREATE_ORG_PARAM_NAME to true.toString(),
+            ORG_NAME_PARAM_NAME to orgName
+        )
+        if (!pricingTableKey.isNullOrBlank()) {
+            params[PRICING_TABLE_KEY_PARAM_NAME] = pricingTableKey
+        }
+        if (!planInterest.isNullOrBlank()) {
+            params[PLAN_INTEREST_PARAM_NAME] = planInterest
+        }
         login(
             type,
             null,
             null,
-            mapOf(
-                REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE,
-                CREATE_ORG_PARAM_NAME to true.toString(),
-                ORG_NAME_PARAM_NAME to orgName
-            )
+            params
         )
     }
 
     fun logout() {
+        cancelTokenRefresh()
         val endSessionRequest = EndSessionRequest.Builder(serviceConfiguration)
-            .setPostLogoutRedirectUri(Uri.parse(logoutRedirect))
+            .setPostLogoutRedirectUri(logoutRedirect.toUri())
             .setAdditionalParameters(mapOf(REDIRECT_PARAM_NAME to logoutRedirect))
             .setState(null)
             .build()
@@ -244,7 +296,7 @@ class KindeSDK(
             serviceConfiguration, // the authorization service configuration
             clientId, // the client ID, typically pre-registered and static
             ResponseTypeValues.CODE, // the response_type value: we want a code
-            Uri.parse(loginRedirect)
+            loginRedirect.toUri()
         )
             .setCodeVerifier(verifier)
             .setAdditionalParameters(
@@ -272,30 +324,87 @@ class KindeSDK(
         launcher.launch(authIntent)
     }
 
-    private fun getToken(tokenRequest: TokenRequest): Boolean {
+    private fun getToken(tokenRequest: TokenRequest, notifyListener: Boolean = true): Boolean {
+        val grantType = tokenRequest.grantType
+
+        // For refresh token requests, use synchronized block to prevent concurrent refreshes
+        if (grantType == "refresh_token") {
+            synchronized(refreshLock) {
+                while (isRefreshing) {
+                    try {
+                        refreshLock.wait()
+                    } catch (ie: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        return false
+                    }
+                }
+                isRefreshing = true
+            }
+        }
+
         val (resp, ex) = tokenRepository.getToken(
             authState = state,
             tokenRequest = tokenRequest
         )
+
         if (resp != null) {
             val tokenNotExists = state.accessToken.isNullOrEmpty()
             state.update(resp, ex)
             apiClient.setBearerToken(state.accessToken.orEmpty())
             store.saveState(state.jsonSerializeString())
-            if (tokenNotExists) {
+            lastTokenUpdateTime = System.currentTimeMillis()
+
+            if (notifyListener && (tokenNotExists || !state.accessToken.isNullOrEmpty())) {
                 sdkListener.onNewToken(state.accessToken.orEmpty())
             }
+
+            // Always schedule the next refresh after successful token operation
+            scheduleTokenRefresh()
+            if (grantType == "refresh_token") {
+                synchronized(refreshLock) {
+                    isRefreshing = false
+                    refreshLock.notifyAll()
+                }
+            } else {
+                isRefreshing = false
+            }
         } else {
+            // Check if this is a 401/invalid_grant error (invalid refresh token)
+            val isInvalidRefreshToken = ex?.let { exception ->
+                val is401 = exception.message?.contains("401") == true
+                val isInvalidGrant = exception.error == "invalid_grant"
+                is401 || isInvalidGrant
+            } ?: false
+
             ex?.let { sdkListener.onException(TokenException("${ex.error} ${ex.errorDescription}")) }
-            logout()
+
+            // Always logout on invalid refresh token (401/invalid_grant)
+            // For other errors, only logout if notifyListener is true (manual refresh)
+            try {
+                if (isInvalidRefreshToken || notifyListener) {
+                    if (Looper.myLooper() == Looper.getMainLooper()) {
+                        logout()
+                    } else {
+                        tokenRefreshHandler.post { logout() }
+                    }
+                }
+            } finally {
+                if (grantType == "refresh_token") {
+                    synchronized(refreshLock) {
+                        isRefreshing = false
+                        refreshLock.notifyAll()
+                    }
+                } else {
+                    isRefreshing = false
+                }
+            }
         }
         return resp != null
     }
 
     private fun checkToken(): Boolean {
-        if (isTokenExpired(TokenType.ACCESS_TOKEN)) {
-            getToken(state.createTokenRefreshRequest())
-        }
+        // checkToken should only verify token signature, not trigger refresh
+        // Token refresh is handled automatically by scheduleTokenRefresh()
         if (state.isAuthorized) {
             store.getKeys()?.let { keysString ->
                 try {
@@ -334,7 +443,8 @@ class KindeSDK(
         }
         if (exception != null) {
             if (exception is TokenExpiredException) {
-                if (getToken(state.createTokenRefreshRequest())) {
+                // Use notifyListener=false to prevent logout on API call token refresh
+                if (getToken(state.createTokenRefreshRequest(), notifyListener = false)) {
                     return callApi(call.clone(), refreshed = true)
                 }
             } else {
@@ -344,31 +454,82 @@ class KindeSDK(
         return null
     }
 
-    private fun isTokenExpired(tokenType: TokenType): Boolean {
+    private fun getExpireEpochSeconds(tokenType: TokenType): Long? {
         val expClaim = getClaim("exp", tokenType)
-        if (expClaim.value != null) {
+        return when (val value = expClaim.value) {
+            is Long -> value
+            is String -> value.toLongOrNull()
+            is Number -> value.toLong()
+            else -> null
+        }
+    }
 
-            try {
-                // Safely convert the expiry claim to seconds since epoch
-                val expirySeconds = when (val value = expClaim.value) {
-                    is Number -> value.toLong()
-                    is String -> value.toLongOrNull() ?: return false
-                    else -> return false
-                }
+    private fun scheduleTokenRefresh() {
+        cancelTokenRefresh()
 
-                val expireEpochMillis = expirySeconds * 1000
-                val currentTimeMillis = System.currentTimeMillis()
-                val skewMs = 60_000L // 60s skew
-                if (currentTimeMillis + skewMs >= expireEpochMillis) {
-                    return true
+        if (isPaused) {
+            return
+        }
+
+        val expireEpochSeconds = getExpireEpochSeconds(TokenType.ACCESS_TOKEN) ?: return
+
+        val expireEpochMillis = expireEpochSeconds * 1000
+        val refreshTimeMillis = expireEpochMillis - TOKEN_REFRESH_BUFFER_MS
+        val currentTimeMillis = System.currentTimeMillis()
+        val delayMillis = refreshTimeMillis - currentTimeMillis
+
+        val retryDelayMs = 10_000L
+
+        if (delayMillis > 0) {
+            postTokenRefresh(delayMillis, retryDelayMs)
+        } else {
+            // Already inside the buffer window — refresh right away
+            postTokenRefresh(0L, retryDelayMs)
+        }
+    }
+
+    private fun postTokenRefresh(delayMillis: Long, retryDelayMs: Long) {
+        tokenRefreshRunnable = createTokenRefreshRunnable(retryDelayMs)
+        tokenRefreshHandler.postDelayed(tokenRefreshRunnable!!, delayMillis)
+    }
+
+    private fun createTokenRefreshRunnable(retryDelayMs: Long = 10_000L): Runnable {
+        return Runnable {
+            thread {
+                val success = getToken(state.createTokenRefreshRequest(), notifyListener = false)
+                if (!success) {
+                    postTokenRefresh(retryDelayMs, retryDelayMs)
                 }
-            } catch (e: Exception) {
-                // If we can't parse the expiry, assume token is valid to avoid breaking the app
-                android.util.Log.w("KindeSDK", "Failed to parse 'exp' claim; treating token as valid", e)
-                return false
             }
         }
-        return false
+    }
+
+    private fun cancelTokenRefresh() {
+        tokenRefreshRunnable?.let { tokenRefreshHandler.removeCallbacks(it) }
+        tokenRefreshRunnable = null
+    }
+
+    override fun onPause(owner: LifecycleOwner) {
+        super.onPause(owner)
+        isPaused = true
+        // Cancel scheduled refresh when app goes to background to save battery
+        cancelTokenRefresh()
+    }
+
+    override fun onResume(owner: LifecycleOwner) {
+        super.onResume(owner)
+        isPaused = false
+        // Check if token needs refresh and reschedule when app comes to foreground
+        if (state.isAuthorized) {
+            scheduleTokenRefresh()
+        }
+    }
+
+    override fun onDestroy(owner: LifecycleOwner) {
+        super.onDestroy(owner)
+        // Clean up resources
+        cancelTokenRefresh()
+        authService.dispose()
     }
 
     companion object {
@@ -385,13 +546,16 @@ class KindeSDK(
         private const val REGISTRATION_PAGE_PARAM_VALUE = "registration"
         private const val AUDIENCE_PARAM_NAME = "audience"
         private const val CREATE_ORG_PARAM_NAME = "is_create_org"
-        private const val ORG_NAME_PARAM_NAME = "org_name "
+        private const val ORG_NAME_PARAM_NAME = "org_name"
         private const val ORG_CODE_PARAM_NAME = "org_code"
+        private const val PRICING_TABLE_KEY_PARAM_NAME = "pricing_table_key"
+        private const val PLAN_INTEREST_PARAM_NAME = "plan_interest"
         private const val REDIRECT_PARAM_NAME = "redirect"
 
         private const val HTTPS = "https://%s/"
         private const val BEARER_AUTH = "kindeBearerAuth"
         private const val LOGIN_HINT = "jdoe@user.example.com"
         private val DEFAULT_SCOPES = listOf("openid", "offline", "email", "profile")
+        private const val TOKEN_REFRESH_BUFFER_MS = 10_000L // 10 seconds
     }
 }
