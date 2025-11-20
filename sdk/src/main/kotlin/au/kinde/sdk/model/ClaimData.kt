@@ -11,4 +11,6 @@ sealed class ClaimData {
     class Organizations(val orgCodes: List<String>) : ClaimData()
     class Permission(orgCode: String, val isGranted: Boolean) : Organization(orgCode)
     class Permissions(orgCode: String, val permissions: List<String>) : Organization(orgCode)
+    class Role(orgCode: String, val isGranted: Boolean) : Organization(orgCode)
+    class Roles(orgCode: String, val roles: List<String>) : Organization(orgCode)
 }
