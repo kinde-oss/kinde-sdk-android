@@ -8,17 +8,14 @@ import android.util.Base64.URL_SAFE
 import android.util.Base64.decode
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
-import au.kinde.sdk.api.OAuthApi
-import au.kinde.sdk.api.UsersApi
-import au.kinde.sdk.api.model.*
-import au.kinde.sdk.api.model.entitlements.EntitlementResponse
-import au.kinde.sdk.api.model.entitlements.EntitlementsResponse
 import androidx.core.net.toUri
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import au.kinde.sdk.api.OAuthApi
 import au.kinde.sdk.api.UsersApi
 import au.kinde.sdk.api.model.*
+import au.kinde.sdk.api.model.entitlements.EntitlementResponse
+import au.kinde.sdk.api.model.entitlements.EntitlementsResponse
 import au.kinde.sdk.infrastructure.ApiClient
 import au.kinde.sdk.keys.Keys
 import au.kinde.sdk.keys.KeysApi
@@ -39,7 +36,6 @@ import java.math.BigInteger
 import java.security.KeyFactory
 import java.security.Signature
 import java.security.spec.RSAPublicKeySpec
-import kotlin.compareTo
 import kotlin.concurrent.thread
 
 class KindeSDK(
@@ -270,7 +266,7 @@ class KindeSDK(
 
     fun getUserProfileV2(): UserProfileV2? = callApi(oAuthApi.getUserProfileV2())
 
-    fun getEntitlement(): EntitlementResponse? = callApi(oAuthApi.getEntitlement())
+    fun getEntitlement(key: String): EntitlementResponse? = callApi(oAuthApi.getEntitlement(key))
 
     fun getEntitlements(): EntitlementsResponse? = callApi(oAuthApi.getEntitlements())
 
