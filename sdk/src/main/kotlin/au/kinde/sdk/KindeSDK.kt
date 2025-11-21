@@ -78,8 +78,10 @@ class KindeSDK(
         if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
             val resp = AuthorizationResponse.fromIntent(data)
             val ex = AuthorizationException.fromIntent(data)
-            state.update(resp, ex)
-            store.saveState(state.jsonSerializeString())
+            synchronized(stateLock) {
+                state.update(resp, ex)
+                store.saveState(state.jsonSerializeString())
+            }
             resp?.let {
                 thread {
                     getToken(resp.createTokenExchangeRequest())
@@ -121,6 +123,7 @@ class KindeSDK(
     private var isPaused = false
     private var lastTokenUpdateTime = 0L
     private val refreshLock = Object()
+    private val stateLock = Object()
 
     @Volatile
     private var isRefreshing = false
@@ -195,6 +198,7 @@ class KindeSDK(
         }
 
         if (!stateJson.isNullOrEmpty()) {
+            refreshState()
             if (isAuthenticated()) {
                 state.accessToken?.let { accessToken ->
                     apiClient.setBearerToken(accessToken)
@@ -272,12 +276,33 @@ class KindeSDK(
         endTokenLauncher.launch(endSessionIntent)
     }
 
-    // this need to rely on shared prefs rather than in-memory object in case initialized in different activities.
+    /**
+     * Refreshes the authentication state from persistent storage.
+     * Call this method when you need to sync the in-memory state with storage,
+     * especially when navigating between activities that may have modified the auth state.
+     */
+    fun refreshState() {
+        synchronized(stateLock) {
+            val stateJson = store.getState()
+            if (!stateJson.isNullOrBlank()) {
+                state = AuthState.jsonDeserialize(stateJson)
+            }
+        }
+    }
+
+    /**
+     * Checks if the user is currently authenticated.
+     * This method relies on shared preferences rather than in-memory state
+     * to work correctly across multiple activities.
+     */
     fun isAuthenticated(): Boolean {
-        val stateJson = store.getState()
-        if (stateJson.isNullOrBlank()) return false
-        state = AuthState.jsonDeserialize(stateJson)
-        return state.isAuthorized && checkToken()
+        synchronized(stateLock) {
+            val stateJson = store.getState()
+            if (stateJson.isNullOrBlank()) return false
+            // Temporarily deserialize to check auth status without mutating instance state
+            val currentState = AuthState.jsonDeserialize(stateJson)
+            return currentState.isAuthorized && checkTokenWithState(currentState)
+        }
     }
 
     fun getUser(): UserProfile? = callApi(oAuthApi.getUser())
@@ -360,9 +385,11 @@ class KindeSDK(
 
         if (resp != null) {
             val tokenNotExists = state.accessToken.isNullOrEmpty()
-            state.update(resp, ex)
+            synchronized(stateLock) {
+                state.update(resp, ex)
+                store.saveState(state.jsonSerializeString())
+            }
             apiClient.setBearerToken(state.accessToken.orEmpty())
-            store.saveState(state.jsonSerializeString())
             lastTokenUpdateTime = System.currentTimeMillis()
 
             if (notifyListener && (tokenNotExists || !state.accessToken.isNullOrEmpty())) {
@@ -413,15 +440,19 @@ class KindeSDK(
         return resp != null
     }
 
-    private fun checkToken(): Boolean {
-        // checkToken should only verify token signature, not trigger refresh
-        // Token refresh is handled automatically by scheduleTokenRefresh()
-        if (state.isAuthorized) {
+    /*
+    * checkToken should only verify token signature, not trigger refresh
+    * Token refresh is handled automatically by scheduleTokenRefresh()
+    */
+    private fun checkToken() = checkTokenWithState(state)
+
+    private fun checkTokenWithState(authState: AuthState): Boolean {
+        if (authState.isAuthorized) {
             store.getKeys()?.let { keysString ->
                 try {
                     gson.fromJson(keysString, Keys::class.java)?.let { keys ->
                         keys.keys.firstOrNull()?.let { key ->
-                            val jwt = state.accessToken.orEmpty()
+                            val jwt = authState.accessToken.orEmpty()
 
                             val exponentB: ByteArray = decode(key.exponent, URL_SAFE)
                             val modulusB: ByteArray = decode(key.modulus, URL_SAFE)
@@ -530,7 +561,8 @@ class KindeSDK(
     override fun onResume(owner: LifecycleOwner) {
         super.onResume(owner)
         isPaused = false
-        // Check if token needs refresh and reschedule when app comes to foreground
+        // Refresh state from storage and check if token needs refresh when app comes to foreground
+        refreshState()
         if (isAuthenticated()) {
             scheduleTokenRefresh()
         }
