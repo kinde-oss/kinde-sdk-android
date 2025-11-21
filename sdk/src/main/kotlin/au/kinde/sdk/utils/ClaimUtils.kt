@@ -42,6 +42,22 @@ object ClaimDelegate : ClaimApi {
         )
     }
 
+    override fun getRoles(): ClaimData.Roles {
+        return ClaimData.Roles(
+            getClaimInternal(ORG_CODE_CLAIM, type = String::class).orEmpty(),
+            getClaimInternal(ROLES_CLAIM, type = List::class) as? List<String> ?: emptyList()
+        )
+    }
+
+    override fun getRole(role: String): ClaimData.Role {
+        return ClaimData.Role(
+            getClaimInternal(ORG_CODE_CLAIM, type = String::class).orEmpty(),
+            (getClaimInternal(ROLES_CLAIM, type = List::class) as? List<String>
+                ?: emptyList())
+                .contains(role)
+        )
+    }
+
     override fun getUserOrganizations(): ClaimData.Organizations {
         return ClaimData.Organizations(
             getClaimInternal(ORG_CODES_CLAIM, TokenType.ID_TOKEN, List::class) as? List<String>
@@ -96,6 +112,25 @@ object ClaimDelegate : ClaimApi {
     override fun getIntegerFlag(code: String, defaultValue: Int?): Int? =
         getFlag(code, defaultValue, FlagType.Integer)?.value as? Int?
 
+    override fun getAllFlags(): Map<String, Flag> {
+        val flagClaim = getClaimInternal(FEATURE_FLAGS_CLAIM, TokenType.ACCESS_TOKEN, String::class)
+        val flagsObject = flagClaim?.let { JSONObject(flagClaim) } ?: JSONObject()
+        val flagsMap = mutableMapOf<String, Flag>()
+        
+        flagsObject.keys().forEach { code ->
+            val flagObject = flagsObject.getJSONObject(code)
+            val flag = Flag(
+                code,
+                FlagType.fromLetter(flagObject.getString(FLAG_TYPE)),
+                flagObject.get(FLAG_VALUE),
+                false
+            )
+            flagsMap[code] = flag
+        }
+        
+        return flagsMap
+    }
+
     private fun <T : Any> getClaimInternal(
         claim: String,
         tokenType: TokenType = TokenType.ACCESS_TOKEN,
@@ -127,6 +162,7 @@ object ClaimDelegate : ClaimApi {
     }
 
     private const val PERMISSIONS_CLAIM = "permissions"
+    private const val ROLES_CLAIM = "roles"
     private const val ORG_CODE_CLAIM = "org_code"
     private const val ORG_CODES_CLAIM = "org_codes"
     private const val SUB_CLAIM = "sub"
@@ -150,6 +186,10 @@ interface ClaimApi {
 
     fun getPermission(permission: String): ClaimData.Permission
 
+    fun getRoles(): ClaimData.Roles
+
+    fun getRole(role: String): ClaimData.Role
+
     fun getUserOrganizations(): ClaimData.Organizations
 
     fun getOrganization(): ClaimData.Organization
@@ -161,6 +201,8 @@ interface ClaimApi {
     fun getStringFlag(code: String, defaultValue: String? = null): String?
 
     fun getIntegerFlag(code: String, defaultValue: Int? = null): Int?
+
+    fun getAllFlags(): Map<String, Flag>
 }
 
 interface TokenProvider {
