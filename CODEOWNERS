@@ -1,1 +1,5 @@
 * @kinde-oss/giants-kinde
+build.gradle @kinde-oss/sdk-engineers
+**/build.gradle @kinde-oss/sdk-engineers
+build.gradle @kinde-oss/sdk-engineers
+**/build.gradle @kinde-oss/sdk-engineers
