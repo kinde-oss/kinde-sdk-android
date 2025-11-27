@@ -50,7 +50,7 @@ class KindeSDK(
 
     private val gson = Gson()
 
-    private val serviceConfiguration: AuthorizationServiceConfiguration
+    private lateinit var serviceConfiguration: AuthorizationServiceConfiguration
 
     private lateinit var state: AuthState
 
@@ -88,8 +88,9 @@ class KindeSDK(
             val resp = EndSessionResponse.fromIntent(data)
             val ex = AuthorizationException.fromIntent(data)
             apiClient.setBearerToken("")
-            sdkListener.onLogout()
             store.clearState()
+            state = AuthState(serviceConfiguration)
+            sdkListener.onLogout()
             ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
         }
     }
