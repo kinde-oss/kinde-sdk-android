@@ -50,7 +50,7 @@ class KindeSDK(
 
     private val gson = Gson()
 
-    private val serviceConfiguration: AuthorizationServiceConfiguration
+    private lateinit var serviceConfiguration: AuthorizationServiceConfiguration
 
     private lateinit var state: AuthState
 
@@ -88,8 +88,9 @@ class KindeSDK(
             val resp = EndSessionResponse.fromIntent(data)
             val ex = AuthorizationException.fromIntent(data)
             apiClient.setBearerToken("")
-            sdkListener.onLogout()
             store.clearState()
+            state = AuthState(serviceConfiguration)
+            sdkListener.onLogout()
             ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
         }
     }
@@ -311,7 +312,7 @@ class KindeSDK(
 
     /**
      * Get all permissions for the authenticated user
-     * 
+     *
      * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API.
      *                Set useCache = false to bypass cache and force a fresh API call.
      * @return ClaimData.Permissions containing org code and list of permission keys
@@ -352,11 +353,11 @@ class KindeSDK(
 
     /**
      * Check if user has a specific permission
-     * 
+     *
      * Note: When using forceApi=true, this fetches ALL permissions from the API, but results are
      * cached for 60 seconds by default. Subsequent calls within the cache window will use cached data.
      * To force a fresh API call, use ApiOptions(forceApi = true, useCache = false).
-     * 
+     *
      * @param permission The permission key to check
      * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
      * @return ClaimData.Permission with orgCode and isGranted status
@@ -375,7 +376,7 @@ class KindeSDK(
 
     /**
      * Get all roles for the authenticated user
-     * 
+     *
      * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API.
      *                Set useCache = false to bypass cache and force a fresh API call.
      * @return ClaimData.Roles containing org code and list of role keys
@@ -416,11 +417,11 @@ class KindeSDK(
 
     /**
      * Check if user has a specific role
-     * 
+     *
      * Note: When using forceApi=true, this fetches ALL roles from the API, but results are
      * cached for 60 seconds by default. Subsequent calls within the cache window will use cached data.
      * To force a fresh API call, use ApiOptions(forceApi = true, useCache = false).
-     * 
+     *
      * @param role The role key to check
      * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
      * @return ClaimData.Role with orgCode and isGranted status
@@ -439,11 +440,11 @@ class KindeSDK(
 
     /**
      * Get a boolean feature flag value
-     * 
+     *
      * Note: When using forceApi=true, this fetches ALL feature flags from the API, but results are
      * cached for 60 seconds by default. Subsequent calls within the cache window will use cached data.
      * To force a fresh API call, use ApiOptions(forceApi = true, useCache = false).
-     * 
+     *
      * @param code The flag code/key
      * @param defaultValue Default value if flag doesn't exist
      * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
@@ -469,11 +470,11 @@ class KindeSDK(
 
     /**
      * Get a string feature flag value
-     * 
+     *
      * Note: When using forceApi=true, this fetches ALL feature flags from the API, but results are
      * cached for 60 seconds by default. Subsequent calls within the cache window will use cached data.
      * To force a fresh API call, use ApiOptions(forceApi = true, useCache = false).
-     * 
+     *
      * @param code The flag code/key
      * @param defaultValue Default value if flag doesn't exist
      * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
@@ -498,11 +499,11 @@ class KindeSDK(
 
     /**
      * Get an integer feature flag value
-     * 
+     *
      * Note: When using forceApi=true, this fetches ALL feature flags from the API, but results are
      * cached for 60 seconds by default. Subsequent calls within the cache window will use cached data.
      * To force a fresh API call, use ApiOptions(forceApi = true, useCache = false).
-     * 
+     *
      * @param code The flag code/key
      * @param defaultValue Default value if flag doesn't exist
      * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
@@ -527,7 +528,7 @@ class KindeSDK(
 
     /**
      * Get all feature flags for the authenticated user
-     * 
+     *
      * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API.
      *                Set useCache = false to bypass cache and force a fresh API call.
      * @return Map of flag codes to Flag objects
@@ -565,7 +566,7 @@ class KindeSDK(
         if (options.useCache) {
             flagsCache = CacheEntry(flags, System.currentTimeMillis())
         }
-        
+
         return flags
     }
 
