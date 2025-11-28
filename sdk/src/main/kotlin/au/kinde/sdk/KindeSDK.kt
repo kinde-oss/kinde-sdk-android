@@ -52,6 +52,7 @@ class KindeSDK(
 
     private lateinit var serviceConfiguration: AuthorizationServiceConfiguration
 
+    @Volatile
     private lateinit var state: AuthState
 
     private val authService = AuthorizationService(activity)
@@ -69,11 +70,25 @@ class KindeSDK(
         if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
             val resp = AuthorizationResponse.fromIntent(data)
             val ex = AuthorizationException.fromIntent(data)
-            state.update(resp, ex)
-            store.saveState(state.jsonSerializeString())
+            synchronized(stateLock) {
+                if (isLoggingOut) return@registerForActivityResult
+                state.update(resp, ex)
+                store.saveState(state.jsonSerializeString())
+            }
             resp?.let {
                 thread {
-                    getToken(resp.createTokenExchangeRequest())
+                    synchronized(stateLock) {
+                        if (isLoggingOut) return@thread
+                        activeBackgroundOperations++
+                    }
+                    try {
+                        getToken(resp.createTokenExchangeRequest())
+                    } finally {
+                        synchronized(stateLock) {
+                            activeBackgroundOperations--
+                            stateLock.notifyAll()
+                        }
+                    }
                 }
             }
             ex?.let { sdkListener.onException(AuthException("${ex.error} ${ex.errorDescription}")) }
@@ -87,9 +102,12 @@ class KindeSDK(
         if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
             val resp = EndSessionResponse.fromIntent(data)
             val ex = AuthorizationException.fromIntent(data)
-            apiClient.setBearerToken("")
-            store.clearState()
-            state = AuthState(serviceConfiguration)
+            synchronized(stateLock) {
+                apiClient.setBearerToken("")
+                store.clearState()
+                state = AuthState(serviceConfiguration)
+                isLoggingOut = false
+            }
             sdkListener.onLogout()
             ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
         }
@@ -115,10 +133,15 @@ class KindeSDK(
     @Volatile
     private var isPaused = false
     private var lastTokenUpdateTime = 0L
+    private val stateLock = Object()
     private val refreshLock = Object()
 
     @Volatile
     private var isRefreshing = false
+    @Volatile
+    private var isLoggingOut = false
+    @Volatile
+    private var activeBackgroundOperations = 0
 
     // Cache infrastructure for API responses
     private data class CacheEntry<T>(
@@ -272,6 +295,26 @@ class KindeSDK(
     }
 
     fun logout() {
+        synchronized(stateLock) {
+            // Set logout flag to prevent new background operations
+            isLoggingOut = true
+            
+            // Wait for all active background operations to complete
+            while (activeBackgroundOperations > 0) {
+                try {
+                    stateLock.wait(5000) // 5 second timeout
+                    if (activeBackgroundOperations > 0) {
+                        // Timeout - log warning but proceed
+                        android.util.Log.w("KindeSDK", "Logout timeout waiting for $activeBackgroundOperations background operations")
+                        break
+                    }
+                } catch (ie: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    break
+                }
+            }
+        }
+        
         clearCache()
         cancelTokenRefresh()
         val endSessionRequest = EndSessionRequest.Builder(serviceConfiguration)
@@ -611,6 +654,11 @@ class KindeSDK(
     }
 
     private fun getToken(tokenRequest: TokenRequest, notifyListener: Boolean = true): Boolean {
+        // Check if logout is in progress
+        synchronized(stateLock) {
+            if (isLoggingOut) return false
+        }
+        
         val grantType = tokenRequest.grantType
 
         // For refresh token requests, use synchronized block to prevent concurrent refreshes
@@ -624,6 +672,10 @@ class KindeSDK(
                         return false
                     }
                 }
+                // Double-check logout flag after waiting
+                synchronized(stateLock) {
+                    if (isLoggingOut) return false
+                }
                 isRefreshing = true
             }
         }
@@ -634,14 +686,29 @@ class KindeSDK(
         )
 
         if (resp != null) {
-            val tokenNotExists = state.accessToken.isNullOrEmpty()
-            state.update(resp, ex)
-            apiClient.setBearerToken(state.accessToken.orEmpty())
-            store.saveState(state.jsonSerializeString())
-            lastTokenUpdateTime = System.currentTimeMillis()
+            synchronized(stateLock) {
+                // Check if logout happened while we were getting token
+                if (isLoggingOut) {
+                    if (grantType == "refresh_token") {
+                        synchronized(refreshLock) {
+                            isRefreshing = false
+                            refreshLock.notifyAll()
+                        }
+                    } else {
+                        isRefreshing = false
+                    }
+                    return false
+                }
+                
+                val tokenNotExists = state.accessToken.isNullOrEmpty()
+                state.update(resp, ex)
+                apiClient.setBearerToken(state.accessToken.orEmpty())
+                store.saveState(state.jsonSerializeString())
+                lastTokenUpdateTime = System.currentTimeMillis()
 
-            if (notifyListener && (tokenNotExists || !state.accessToken.isNullOrEmpty())) {
-                sdkListener.onNewToken(state.accessToken.orEmpty())
+                if (notifyListener && (tokenNotExists || !state.accessToken.isNullOrEmpty())) {
+                    sdkListener.onNewToken(state.accessToken.orEmpty())
+                }
             }
 
             // Always schedule the next refresh after successful token operation
@@ -782,9 +849,20 @@ class KindeSDK(
     private fun createTokenRefreshRunnable(retryDelayMs: Long = 10_000L): Runnable {
         return Runnable {
             thread {
-                val success = getToken(state.createTokenRefreshRequest(), notifyListener = false)
-                if (!success) {
-                    postTokenRefresh(retryDelayMs, retryDelayMs)
+                synchronized(stateLock) {
+                    if (isLoggingOut) return@thread
+                    activeBackgroundOperations++
+                }
+                try {
+                    val success = getToken(state.createTokenRefreshRequest(), notifyListener = false)
+                    if (!success && !isLoggingOut) {
+                        postTokenRefresh(retryDelayMs, retryDelayMs)
+                    }
+                } finally {
+                    synchronized(stateLock) {
+                        activeBackgroundOperations--
+                        stateLock.notifyAll()
+                    }
                 }
             }
         }
