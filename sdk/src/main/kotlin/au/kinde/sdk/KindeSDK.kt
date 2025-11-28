@@ -299,19 +299,22 @@ class KindeSDK(
             // Set logout flag to prevent new background operations
             isLoggingOut = true
             
-            // Wait for all active background operations to complete
+            // Wait for all active background operations to complete with proper timeout handling
+            val deadline = System.currentTimeMillis() + 5000 // 5 second timeout
             while (activeBackgroundOperations > 0) {
+                val remainingMillis = deadline - System.currentTimeMillis()
+                if (remainingMillis <= 0) {
+                    // Timeout - log warning but proceed
+                    android.util.Log.w("KindeSDK", "Logout timeout waiting for $activeBackgroundOperations background operations")
+                    break
+                }
                 try {
-                    stateLock.wait(5000) // 5 second timeout
-                    if (activeBackgroundOperations > 0) {
-                        // Timeout - log warning but proceed
-                        android.util.Log.w("KindeSDK", "Logout timeout waiting for $activeBackgroundOperations background operations")
-                        break
-                    }
+                    stateLock.wait(remainingMillis)
                 } catch (ie: InterruptedException) {
                     Thread.currentThread().interrupt()
                     break
                 }
+                // Loop continues to recheck activeBackgroundOperations (handles spurious wakeups and notifyAll)
             }
         }
         
