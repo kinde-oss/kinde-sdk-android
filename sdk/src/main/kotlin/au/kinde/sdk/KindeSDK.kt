@@ -66,6 +66,12 @@ class KindeSDK(
             ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
             // Reset invitation handling flag on cancellation
             isHandlingInvitation = false
+            // Re-evaluate current auth state and notify listener
+            if (isAuthenticated()) {
+                state.accessToken?.let { sdkListener.onNewToken(it) }
+            } else {
+                sdkListener.onLogout()
+            }
         }
 
         if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
@@ -82,6 +88,12 @@ class KindeSDK(
                 sdkListener.onException(AuthException("${ex.error} ${ex.errorDescription}"))
                 // Reset invitation handling flag on auth error
                 isHandlingInvitation = false
+                // Re-evaluate current auth state and notify listener
+                if (isAuthenticated()) {
+                    state.accessToken?.let { token -> sdkListener.onNewToken(token) }
+                } else {
+                    sdkListener.onLogout()
+                }
             }
         }
     }
@@ -322,6 +334,7 @@ class KindeSDK(
         type: GrantType? = null,
         orgCode: String? = null
     ) {
+        isHandlingInvitation = true
         val params = mutableMapOf(
             REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE,
             INVITATION_CODE_PARAM_NAME to invitationCode,
