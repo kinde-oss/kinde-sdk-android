@@ -64,6 +64,14 @@ class KindeSDK(
         if (result.resultCode == ComponentActivity.RESULT_CANCELED && data != null) {
             val ex = AuthorizationException.fromIntent(data)
             ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+            // Reset invitation handling flag on cancellation
+            _isHandlingInvitation = false
+            // Re-evaluate current auth state and notify listener
+            if (isAuthenticated()) {
+                state.accessToken?.let { sdkListener.onNewToken(it) }
+            } else {
+                sdkListener.onLogout()
+            }
         }
 
         if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
@@ -76,7 +84,17 @@ class KindeSDK(
                     getToken(resp.createTokenExchangeRequest())
                 }
             }
-            ex?.let { sdkListener.onException(AuthException("${ex.error} ${ex.errorDescription}")) }
+            ex?.let {
+                sdkListener.onException(AuthException("${ex.error} ${ex.errorDescription}"))
+                // Reset invitation handling flag on auth error
+                _isHandlingInvitation = false
+                // Re-evaluate current auth state and notify listener
+                if (isAuthenticated()) {
+                    state.accessToken?.let { token -> sdkListener.onNewToken(token) }
+                } else {
+                    sdkListener.onLogout()
+                }
+            }
         }
     }
 
@@ -118,6 +136,10 @@ class KindeSDK(
 
     @Volatile
     private var isRefreshing = false
+
+    // Track if we're handling an invitation code (skip normal init callbacks)
+    @Volatile
+    private var _isHandlingInvitation = false
 
     // Cache infrastructure for API responses
     private data class CacheEntry<T>(
@@ -203,16 +225,30 @@ class KindeSDK(
             })
         }
 
-        if (!stateJson.isNullOrEmpty()) {
-            if (isAuthenticated()) {
-                state.accessToken?.let { accessToken ->
-                    apiClient.setBearerToken(accessToken)
-                    sdkListener.onNewToken(accessToken)
-                    scheduleTokenRefresh()
-                }
+        // Check for invitation_code in the launching intent
+        val invitationCode = activity.intent?.data?.getQueryParameter(INVITATION_CODE_PARAM_NAME)
+        if (!invitationCode.isNullOrEmpty()) {
+            _isHandlingInvitation = true
+            // Post the invitation handling to run after init completes
+            // This ensures the activity is fully created before launching the auth flow
+            Handler(Looper.getMainLooper()).post {
+                handleInvitation(invitationCode)
             }
-        } else {
-            sdkListener.onLogout()
+        }
+
+        // Skip normal auth callbacks if handling invitation
+        if (!_isHandlingInvitation) {
+            if (!stateJson.isNullOrEmpty()) {
+                if (isAuthenticated()) {
+                    state.accessToken?.let { accessToken ->
+                        apiClient.setBearerToken(accessToken)
+                        sdkListener.onNewToken(accessToken)
+                        scheduleTokenRefresh()
+                    }
+                }
+            } else {
+                sdkListener.onLogout()
+            }
         }
         ClaimDelegate.tokenProvider = this
     }
@@ -222,8 +258,19 @@ class KindeSDK(
 
     fun getRefreshToken(): String? = state.refreshToken
 
-    fun login(type: GrantType? = null, orgCode: String? = null, loginHint: String? = null) {
-        login(type, orgCode, loginHint, mapOf())
+    fun login(
+        type: GrantType? = null,
+        orgCode: String? = null,
+        loginHint: String? = null,
+        invitationCode: String? = null
+    ) {
+        val params = mutableMapOf<String, String>()
+        if (!invitationCode.isNullOrBlank()) {
+            _isHandlingInvitation = true
+            params[INVITATION_CODE_PARAM_NAME] = invitationCode
+            params[IS_INVITATION_PARAM_NAME] = "true"
+        }
+        login(type, orgCode, loginHint, params)
     }
 
     fun register(
@@ -231,7 +278,8 @@ class KindeSDK(
         orgCode: String? = null,
         loginHint: String? = null,
         pricingTableKey: String? = null,
-        planInterest: String? = null
+        planInterest: String? = null,
+        invitationCode: String? = null
     ) {
         val params = mutableMapOf<String, String>(
             REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE
@@ -241,6 +289,11 @@ class KindeSDK(
         }
         if (!planInterest.isNullOrBlank()) {
             params[PLAN_INTEREST_PARAM_NAME] = planInterest
+        }
+        if (!invitationCode.isNullOrBlank()) {
+            _isHandlingInvitation = true
+            params[INVITATION_CODE_PARAM_NAME] = invitationCode
+            params[IS_INVITATION_PARAM_NAME] = "true"
         }
         login(type, orgCode, loginHint, params)
     }
@@ -270,6 +323,28 @@ class KindeSDK(
         )
     }
 
+    /**
+     * Handle an invitation code by redirecting to registration with the code.
+     * This is typically called when the app detects an invitation_code in the incoming intent/deep link.
+     *
+     * @param invitationCode The invitation code from the URL
+     * @param type Optional grant type (defaults to null)
+     * @param orgCode Optional organization code
+     */
+    fun handleInvitation(
+        invitationCode: String,
+        type: GrantType? = null,
+        orgCode: String? = null
+    ) {
+        _isHandlingInvitation = true
+        val params = mutableMapOf(
+            REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE,
+            INVITATION_CODE_PARAM_NAME to invitationCode,
+            IS_INVITATION_PARAM_NAME to "true"
+        )
+        login(type, orgCode, null, params)
+    }
+
     fun logout() {
         clearCache()
         cancelTokenRefresh()
@@ -294,6 +369,14 @@ class KindeSDK(
     }
 
     fun isAuthenticated() = state.isAuthorized && checkToken()
+
+    /**
+     * Check if the SDK is currently handling an invitation code.
+     * This can be used to show appropriate loading UI while the invitation flow is in progress.
+     *
+     * @return true if an invitation code was detected and is being processed
+     */
+    fun isHandlingInvitation() = _isHandlingInvitation
 
     fun getUser(): UserProfile? = callApi(oAuthApi.getUser())
 
@@ -643,6 +726,9 @@ class KindeSDK(
                 sdkListener.onNewToken(state.accessToken.orEmpty())
             }
 
+            // Reset invitation handling flag after successful authentication
+            _isHandlingInvitation = false
+
             // Always schedule the next refresh after successful token operation
             scheduleTokenRefresh()
             if (grantType == "refresh_token") {
@@ -836,6 +922,8 @@ class KindeSDK(
         private const val PRICING_TABLE_KEY_PARAM_NAME = "pricing_table_key"
         private const val PLAN_INTEREST_PARAM_NAME = "plan_interest"
         private const val REDIRECT_PARAM_NAME = "redirect"
+        private const val INVITATION_CODE_PARAM_NAME = "invitation_code"
+        private const val IS_INVITATION_PARAM_NAME = "is_invitation"
 
         private const val HTTPS = "https://%s/"
         private const val BEARER_AUTH = "kindeBearerAuth"
