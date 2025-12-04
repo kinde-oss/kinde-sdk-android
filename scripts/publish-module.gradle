@@ -17,8 +17,14 @@ task androidSourcesJar(type: Jar) {
     }
 }
 
+task androidJavadocJar(type: Jar) {
+    archiveClassifier.set('javadoc')
+    // Empty Javadoc JAR for Maven Central requirement
+}
+
 artifacts {
     archives androidSourcesJar
+    archives androidJavadocJar
 }
 
 afterEvaluate {
@@ -37,6 +43,7 @@ afterEvaluate {
                 }
 
                 artifact androidSourcesJar
+                artifact androidJavadocJar
 
                 pom {
                     name = PUBLISH_ARTIFACT_ID
