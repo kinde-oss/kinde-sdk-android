@@ -114,6 +114,10 @@ class KindeSDK(
     private val clientId: String
     private val audience: String?
 
+    // Runtime overrides for domain and clientId (cleared on logout)
+    private var runtimeDomain: String? = null
+    private var runtimeClientId: String? = null
+
     private val store: Store
     private val tokenRepository: TokenRepository
     private val apiClient: ApiClient
@@ -241,16 +245,44 @@ class KindeSDK(
 
     fun getRefreshToken(): String? = state.refreshToken
 
-    fun login(type: GrantType? = null, orgCode: String? = null, loginHint: String? = null) {
-        login(type, orgCode, loginHint, mapOf())
+    /**
+     * Initiate login flow
+     * 
+     * @param type The grant type (PKCE or implicit)
+     * @param orgCode Optional organization code
+     * @param loginHint Optional login hint (email)
+     * @param domain Optional domain to use for this login (overrides config)
+     * @param clientId Optional client ID to use for this login (overrides config)
+     */
+    fun login(
+        type: GrantType? = null,
+        orgCode: String? = null,
+        loginHint: String? = null,
+        domain: String? = null,
+        clientId: String? = null
+    ) {
+        login(type, orgCode, loginHint, mapOf(), domain, clientId)
     }
 
+    /**
+     * Initiate registration flow
+     * 
+     * @param type The grant type (PKCE or implicit)
+     * @param orgCode Optional organization code
+     * @param loginHint Optional login hint (email)
+     * @param pricingTableKey Optional pricing table key
+     * @param planInterest Optional plan interest
+     * @param domain Optional domain to use for this registration (overrides config)
+     * @param clientId Optional client ID to use for this registration (overrides config)
+     */
     fun register(
         type: GrantType? = null,
         orgCode: String? = null,
         loginHint: String? = null,
         pricingTableKey: String? = null,
-        planInterest: String? = null
+        planInterest: String? = null,
+        domain: String? = null,
+        clientId: String? = null
     ) {
         val params = mutableMapOf<String, String>(
             REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE
@@ -261,14 +293,26 @@ class KindeSDK(
         if (!planInterest.isNullOrBlank()) {
             params[PLAN_INTEREST_PARAM_NAME] = planInterest
         }
-        login(type, orgCode, loginHint, params)
+        login(type, orgCode, loginHint, params, domain, clientId)
     }
 
+    /**
+     * Initiate organization creation flow
+     * 
+     * @param type The grant type (PKCE or implicit)
+     * @param orgName The name of the organization to create
+     * @param pricingTableKey Optional pricing table key
+     * @param planInterest Optional plan interest
+     * @param domain Optional domain to use for this operation (overrides config)
+     * @param clientId Optional client ID to use for this operation (overrides config)
+     */
     fun createOrg(
         type: GrantType? = null,
         orgName: String,
         pricingTableKey: String? = null,
-        planInterest: String? = null
+        planInterest: String? = null,
+        domain: String? = null,
+        clientId: String? = null
     ) {
         val params = mutableMapOf<String, String>(
             REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE,
@@ -285,20 +329,36 @@ class KindeSDK(
             type,
             null,
             null,
-            params
+            params,
+            domain,
+            clientId
         )
     }
 
     fun logout() {
         clearCache()
         cancelTokenRefresh()
-        val endSessionRequest = EndSessionRequest.Builder(serviceConfiguration)
+        
+        // Use the effective domain for logout
+        val effectiveDomain = runtimeDomain ?: domain
+        val logoutServiceConfig = AuthorizationServiceConfiguration(
+            AUTH_URL.format(effectiveDomain).toUri(),
+            TOKEN_URL.format(effectiveDomain).toUri(),
+            null,
+            LOGOUT_URL.format(effectiveDomain).toUri()
+        )
+        
+        val endSessionRequest = EndSessionRequest.Builder(logoutServiceConfig)
             .setPostLogoutRedirectUri(logoutRedirect.toUri())
             .setAdditionalParameters(mapOf(REDIRECT_PARAM_NAME to logoutRedirect))
             .setState(null)
             .build()
         val endSessionIntent = authService.getEndSessionRequestIntent(endSessionRequest)
         endTokenLauncher.launch(endSessionIntent)
+        
+        // Clear runtime overrides after logout
+        runtimeDomain = null
+        runtimeClientId = null
     }
 
     /**
@@ -620,13 +680,34 @@ class KindeSDK(
         type: GrantType? = null,
         orgCode: String? = null,
         loginHint: String? = null,
-        additionalParams: Map<String, String>
+        additionalParams: Map<String, String>,
+        customDomain: String? = null,
+        customClientId: String? = null
     ) {
+        // Store runtime overrides if provided
+        customDomain?.let { runtimeDomain = it }
+        customClientId?.let { runtimeClientId = it }
+        
+        // Use runtime values if set, otherwise fall back to config
+        val effectiveDomain = runtimeDomain ?: domain
+        val effectiveClientId = runtimeClientId ?: clientId
+        
+        // Reconfigure API client if domain changed
+        reconfigureApiClientIfNeeded(effectiveDomain)
+        
+        // Create service configuration with effective domain
+        val loginServiceConfig = AuthorizationServiceConfiguration(
+            AUTH_URL.format(effectiveDomain).toUri(),
+            TOKEN_URL.format(effectiveDomain).toUri(),
+            null,
+            LOGOUT_URL.format(effectiveDomain).toUri()
+        )
+        
         val verifier =
             if (type == GrantType.PKCE) CodeVerifierUtil.generateRandomCodeVerifier() else null
         val authRequestBuilder = AuthorizationRequest.Builder(
-            serviceConfiguration, // the authorization service configuration
-            clientId, // the client ID, typically pre-registered and static
+            loginServiceConfig, // the authorization service configuration
+            effectiveClientId, // the client ID (config or runtime override)
             ResponseTypeValues.CODE, // the response_type value: we want a code
             loginRedirect.toUri()
         )
@@ -845,6 +926,19 @@ class KindeSDK(
     private fun cancelTokenRefresh() {
         tokenRefreshRunnable?.let { tokenRefreshHandler.removeCallbacks(it) }
         tokenRefreshRunnable = null
+    }
+    
+    /**
+     * Reconfigures the API client if the domain has changed from the originally configured domain.
+     * This ensures API calls go to the correct endpoint when using runtime domain overrides.
+     */
+    private fun reconfigureApiClientIfNeeded(effectiveDomain: String) {
+        val currentBaseUrl = apiClient.getBaseUrl()
+        val expectedBaseUrl = HTTPS.format(effectiveDomain)
+        
+        if (currentBaseUrl != expectedBaseUrl) {
+            apiClient.setBaseUrl(expectedBaseUrl)
+        }
     }
 
     override fun onPause(owner: LifecycleOwner) {
