@@ -122,6 +122,7 @@ class ApiClient(
      * @param newBaseUrl The new base URL
      * @return ApiClient
      */
+    @Synchronized
     fun setBaseUrl(newBaseUrl: String): ApiClient {
         baseUrl = newBaseUrl
         normalizeBaseUrl()
@@ -133,8 +134,10 @@ class ApiClient(
      * Gets the current base URL
      * @return The current base URL
      */
+    @Synchronized
     fun getBaseUrl(): String = baseUrl
 
+    @Synchronized
     fun <S> createService(serviceClass: Class<S>): S {
         val usedCallFactory = this.callFactory ?: clientBuilder.build()
         return retrofitBuilder.callFactory(usedCallFactory).build().create(serviceClass)

@@ -55,7 +55,7 @@ import au.kinde.sdk.model.ClaimData
 import au.kinde.sdk.model.Flag
 
 class KindeSDK(
-    activity: ComponentActivity,
+    private val activity: ComponentActivity,
     private val loginRedirect: String,
     private val logoutRedirect: String,
     private val scopes: List<String> = DEFAULT_SCOPES,
@@ -115,18 +115,20 @@ class KindeSDK(
     private val audience: String?
 
     // Runtime overrides for domain and clientId (cleared on logout)
+    @Volatile
     private var runtimeDomain: String? = null
+    @Volatile
     private var runtimeClientId: String? = null
 
-    private val store: Store
+    private var store: Store
     private val tokenRepository: TokenRepository
     private val apiClient: ApiClient
-    private val keysApi: KeysApi
-    private val oAuthApi: OAuthApi
-    private val usersApi: UsersApi
-    private val permissionsApi: PermissionsApi
-    private val rolesApi: RolesApi
-    private val featureFlagsApi: FeatureFlagsApi
+    private var keysApi: KeysApi
+    private var oAuthApi: OAuthApi
+    private var usersApi: UsersApi
+    private var permissionsApi: PermissionsApi
+    private var rolesApi: RolesApi
+    private var featureFlagsApi: FeatureFlagsApi
 
     private val tokenRefreshHandler = Handler(Looper.getMainLooper())
     private var tokenRefreshRunnable: Runnable? = null
@@ -211,32 +213,7 @@ class KindeSDK(
         rolesApi = apiClient.createService(RolesApi::class.java)
         featureFlagsApi = apiClient.createService(FeatureFlagsApi::class.java)
 
-        if (store.getKeys().isNullOrEmpty()) {
-            keysApi.getKeys().enqueue(object : Callback<Keys> {
-                override fun onResponse(call: Call<Keys>, response: Response<Keys>) {
-                    response.body()?.let { keys ->
-                        store.saveKeys(gson.toJson(keys))
-                    }
-                }
-
-                override fun onFailure(call: Call<Keys>, t: Throwable) {
-                    sdkListener.onException(Exception(t))
-                }
-            })
-        }
-
-        if (!stateJson.isNullOrEmpty()) {
-            refreshState()
-            if (isAuthenticated()) {
-                state.accessToken?.let { accessToken ->
-                    apiClient.setBearerToken(accessToken)
-                    sdkListener.onNewToken(accessToken)
-                    scheduleTokenRefresh()
-                }
-            }
-        } else {
-            sdkListener.onLogout()
-        }
+        initializeStoreData()
         ClaimDelegate.tokenProvider = this
     }
 
@@ -929,15 +906,65 @@ class KindeSDK(
     }
     
     /**
-     * Reconfigures the API client if the domain has changed from the originally configured domain.
+     * Reconfigures the API clients if the domain has changed from the originally configured domain.
      * This ensures API calls go to the correct endpoint when using runtime domain overrides.
      */
     private fun reconfigureApiClientIfNeeded(effectiveDomain: String) {
         val currentBaseUrl = apiClient.getBaseUrl()
         val expectedBaseUrl = HTTPS.format(effectiveDomain)
-        
+
         if (currentBaseUrl != expectedBaseUrl) {
             apiClient.setBaseUrl(expectedBaseUrl)
+
+            // Recreate Store with new domain for domain-specific SharedPreferences
+            store = Store(activity, effectiveDomain)
+
+            // Recreate all service instances to use the updated Retrofit client
+            keysApi = apiClient.createService(KeysApi::class.java)
+            oAuthApi = apiClient.createService(OAuthApi::class.java)
+            usersApi = apiClient.createService(UsersApi::class.java)
+            permissionsApi = apiClient.createService(PermissionsApi::class.java)
+            rolesApi = apiClient.createService(RolesApi::class.java)
+            featureFlagsApi = apiClient.createService(FeatureFlagsApi::class.java)
+            
+            // Initialize data for the new domain-specific store
+            initializeStoreData()
+        }
+    }
+    
+    /**
+     * Initializes domain-specific data including keys and authentication state.
+     * This should be called when setting up the SDK or when switching domains.
+     */
+    private fun initializeStoreData() {
+        // Fetch and store keys for the domain if not already present
+        if (store.getKeys().isNullOrEmpty()) {
+            keysApi.getKeys().enqueue(object : Callback<Keys> {
+                override fun onResponse(call: Call<Keys>, response: Response<Keys>) {
+                    response.body()?.let { keys ->
+                        store.saveKeys(gson.toJson(keys))
+                    }
+                }
+
+                override fun onFailure(call: Call<Keys>, t: Throwable) {
+                    sdkListener.onException(Exception(t))
+                }
+            })
+        }
+
+        // Load and setup authentication state from domain-specific store
+        val stateJson = store.getState()
+        if (!stateJson.isNullOrEmpty()) {
+            refreshState()
+            if (isAuthenticated()) {
+                state.accessToken?.let { accessToken ->
+                    apiClient.setBearerToken(accessToken)
+                    sdkListener.onNewToken(accessToken)
+                    scheduleTokenRefresh()
+                }
+            }
+        } else {
+            sdkListener.onLogout()
         }
     }
 

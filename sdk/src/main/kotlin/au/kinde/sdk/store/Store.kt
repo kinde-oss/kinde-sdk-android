@@ -25,8 +25,11 @@ import kotlin.random.Random.Default.nextBytes
  */
 class Store(context: Context, private val key: String) {
 
+    // Create domain-specific SharedPreferences file to isolate state across domains
+    private val prefsName = "${PREFS_NAME}_${key.hashCode().toString().replace("-", "_")}"
+    
     private val authPrefs = context.getSharedPreferences(
-        PREFS_NAME,
+        prefsName,
         AppCompatActivity.MODE_PRIVATE
     )
 
