@@ -994,15 +994,27 @@ class KindeSDK(
                 override fun onResponse(call: Call<Keys>, response: Response<Keys>) {
                     response.body()?.let { keys ->
                         store.saveKeys(gson.toJson(keys))
+                        // Now that keys are available, set up auth state
+                        setupAuthState()
                     }
                 }
 
                 override fun onFailure(call: Call<Keys>, t: Throwable) {
                     sdkListener.onException(Exception(t))
+                    // Don't proceed with auth setup if keys fetch failed
                 }
             })
+        } else {
+            // Keys already exist, set up auth state immediately
+            setupAuthState()
         }
-
+    }
+    
+    /**
+     * Sets up authentication state after keys are confirmed to be available.
+     * This ensures signature verification can succeed.
+     */
+    private fun setupAuthState() {
         // Load and setup authentication state from domain-specific store
         val stateJson = store.getState()
         if (!stateJson.isNullOrEmpty()) {
