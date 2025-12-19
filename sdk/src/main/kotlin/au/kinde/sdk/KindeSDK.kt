@@ -213,7 +213,7 @@ class KindeSDK(
         rolesApi = apiClient.createService(RolesApi::class.java)
         featureFlagsApi = apiClient.createService(FeatureFlagsApi::class.java)
 
-        initializeStoreData(callOnLogoutIfEmpty = true)
+        initializeStoreData()
         ClaimDelegate.tokenProvider = this
     }
 
@@ -948,19 +948,15 @@ class KindeSDK(
             featureFlagsApi = apiClient.createService(FeatureFlagsApi::class.java)
             
             // Initialize data for the new domain-specific store
-            // Don't call onLogout when switching domains during login flow
-            initializeStoreData(callOnLogoutIfEmpty = false)
+            initializeStoreData()
         }
     }
     
     /**
      * Initializes domain-specific data including keys and authentication state.
      * This should be called when setting up the SDK or when switching domains.
-     * 
-     * @param callOnLogoutIfEmpty Whether to call onLogout() if no state exists.
-     *        Should be true during initial SDK setup, false when switching domains during login.
      */
-    private fun initializeStoreData(callOnLogoutIfEmpty: Boolean = true) {
+    private fun initializeStoreData() {
         // Fetch and store keys for the domain if not already present
         if (store.getKeys().isNullOrEmpty()) {
             keysApi.getKeys().enqueue(object : Callback<Keys> {
@@ -987,9 +983,11 @@ class KindeSDK(
                     scheduleTokenRefresh()
                 }
             }
-        } else if (callOnLogoutIfEmpty) {
-            sdkListener.onLogout()
         }
+        // Note: We don't call onLogout() when state is missing because
+        // missing state doesn't mean the user logged out - it could be
+        // first-time initialization or a domain switch during login.
+        // onLogout() is only called in the actual logout flow.
     }
 
     override fun onPause(owner: LifecycleOwner) {
