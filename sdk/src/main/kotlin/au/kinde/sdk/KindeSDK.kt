@@ -914,6 +914,9 @@ class KindeSDK(
         val expectedBaseUrl = HTTPS.format(effectiveDomain)
 
         if (currentBaseUrl != expectedBaseUrl) {
+            // Clear cached data from the previous domain to prevent stale data issues
+            clearCache()
+            
             apiClient.setBaseUrl(expectedBaseUrl)
 
             // Recreate Store with new domain for domain-specific SharedPreferences
