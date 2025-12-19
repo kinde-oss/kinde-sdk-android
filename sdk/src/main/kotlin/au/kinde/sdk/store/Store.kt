@@ -26,7 +26,8 @@ import kotlin.random.Random.Default.nextBytes
 class Store(context: Context, private val key: String) {
 
     // Create domain-specific SharedPreferences file to isolate state across domains
-    private val prefsName = "${PREFS_NAME}_${key.hashCode().toString().replace("-", "_")}"
+    // Sanitize the domain to create a safe filename (replace special chars with underscores)
+    private val prefsName = "${PREFS_NAME}_${sanitizeDomainForFilename(key)}"
     
     private val authPrefs = context.getSharedPreferences(
         prefsName,
@@ -118,5 +119,15 @@ class Store(context: Context, private val key: String) {
         private const val KEY_SIZE = 16
         private const val ALGORITHM = "AES"
         private const val TRANSFORMATION = "$ALGORITHM/CBC/PKCS5Padding"
+        
+        /**
+         * Sanitizes a domain string to create a safe and unique filename.
+         * This prevents hash collisions that could occur with hashCode().
+         */
+        private fun sanitizeDomainForFilename(domain: String): String {
+            // Replace special characters with underscores to create a safe filename
+            // This ensures each domain gets a unique prefs file without collisions
+            return domain.replace("[^a-zA-Z0-9]".toRegex(), "_")
+        }
     }
 }
