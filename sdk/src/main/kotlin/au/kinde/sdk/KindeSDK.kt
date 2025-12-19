@@ -121,7 +121,7 @@ class KindeSDK(
     private var runtimeClientId: String? = null
 
     private var store: Store
-    private val tokenRepository: TokenRepository
+    private var tokenRepository: TokenRepository
     private val apiClient: ApiClient
     private var keysApi: KeysApi
     private var oAuthApi: OAuthApi
@@ -213,7 +213,7 @@ class KindeSDK(
         rolesApi = apiClient.createService(RolesApi::class.java)
         featureFlagsApi = apiClient.createService(FeatureFlagsApi::class.java)
 
-        initializeStoreData()
+        initializeStoreData(callOnLogoutIfEmpty = true)
         ClaimDelegate.tokenProvider = this
     }
 
@@ -918,8 +918,28 @@ class KindeSDK(
 
             // Recreate Store with new domain for domain-specific SharedPreferences
             store = Store(activity, effectiveDomain)
+            
+            // Update the state's serviceConfiguration to use the new domain
+            val newServiceConfig = AuthorizationServiceConfiguration(
+                AUTH_URL.format(effectiveDomain).toUri(),
+                TOKEN_URL.format(effectiveDomain).toUri(),
+                null,
+                LOGOUT_URL.format(effectiveDomain).toUri()
+            )
+            synchronized(stateLock) {
+                // Load any existing state from new domain's store
+                val stateJson = store.getState()
+                if (!stateJson.isNullOrEmpty()) {
+                    state = AuthState.jsonDeserialize(stateJson)
+                } else {
+                    // Create new state with the new service configuration
+                    // This will be used for the token exchange after login
+                    state = AuthState(newServiceConfig)
+                }
+            }
 
             // Recreate all service instances to use the updated Retrofit client
+            tokenRepository = TokenRepository(apiClient.createService(TokenApi::class.java), BuildConfig.SDK_VERSION)
             keysApi = apiClient.createService(KeysApi::class.java)
             oAuthApi = apiClient.createService(OAuthApi::class.java)
             usersApi = apiClient.createService(UsersApi::class.java)
@@ -928,15 +948,19 @@ class KindeSDK(
             featureFlagsApi = apiClient.createService(FeatureFlagsApi::class.java)
             
             // Initialize data for the new domain-specific store
-            initializeStoreData()
+            // Don't call onLogout when switching domains during login flow
+            initializeStoreData(callOnLogoutIfEmpty = false)
         }
     }
     
     /**
      * Initializes domain-specific data including keys and authentication state.
      * This should be called when setting up the SDK or when switching domains.
+     * 
+     * @param callOnLogoutIfEmpty Whether to call onLogout() if no state exists.
+     *        Should be true during initial SDK setup, false when switching domains during login.
      */
-    private fun initializeStoreData() {
+    private fun initializeStoreData(callOnLogoutIfEmpty: Boolean = true) {
         // Fetch and store keys for the domain if not already present
         if (store.getKeys().isNullOrEmpty()) {
             keysApi.getKeys().enqueue(object : Callback<Keys> {
@@ -963,7 +987,7 @@ class KindeSDK(
                     scheduleTokenRefresh()
                 }
             }
-        } else {
+        } else if (callOnLogoutIfEmpty) {
             sdkListener.onLogout()
         }
     }
