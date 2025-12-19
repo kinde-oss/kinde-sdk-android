@@ -106,6 +106,35 @@ class KindeSDK(
             apiClient.setBearerToken("")
             sdkListener.onLogout()
             store.clearState()
+            
+            // Clear runtime overrides only after successful logout
+            // If there were runtime overrides, reconfigure API client back to default domain
+            val hadRuntimeDomain = runtimeDomain != null
+            runtimeDomain = null
+            runtimeClientId = null
+            
+            if (hadRuntimeDomain) {
+                // Reset API client to default domain
+                apiClient.setBaseUrl(HTTPS.format(domain))
+                store = Store(activity, domain)
+                // Reinitialize state with default domain
+                synchronized(stateLock) {
+                    val stateJson = store.getState()
+                    state = if (!stateJson.isNullOrEmpty()) {
+                        AuthState.jsonDeserialize(stateJson)
+                    } else {
+                        // Create new state with default domain configuration
+                        val defaultConfig = AuthorizationServiceConfiguration(
+                            AUTH_URL.format(domain).toUri(),
+                            TOKEN_URL.format(domain).toUri(),
+                            null,
+                            LOGOUT_URL.format(domain).toUri()
+                        )
+                        AuthState(defaultConfig)
+                    }
+                }
+            }
+            
             ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
         }
     }
@@ -333,9 +362,8 @@ class KindeSDK(
         val endSessionIntent = authService.getEndSessionRequestIntent(endSessionRequest)
         endTokenLauncher.launch(endSessionIntent)
         
-        // Clear runtime overrides after logout
-        runtimeDomain = null
-        runtimeClientId = null
+        // Note: Runtime overrides are cleared in endTokenLauncher callback
+        // only after successful logout to avoid inconsistent state if cancelled
     }
 
     /**
