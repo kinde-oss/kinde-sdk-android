@@ -650,7 +650,7 @@ class KindeSDK(
                         put(ORG_CODE_PARAM_NAME, orgCode)
                     }
                     connectionId?.let {
-                        put(CONNECTION_ID_PARAM_NAME, it)
+                        put(CONNECTION_ID_PARAM_NAME, connectionId)
                     }
                 }
             )
