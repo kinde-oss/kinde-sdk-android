@@ -124,12 +124,7 @@ class KindeSDK(
                         AuthState.jsonDeserialize(stateJson)
                     } else {
                         // Create new state with default domain configuration
-                        val defaultConfig = AuthorizationServiceConfiguration(
-                            AUTH_URL.format(domain).toUri(),
-                            TOKEN_URL.format(domain).toUri(),
-                            null,
-                            LOGOUT_URL.format(domain).toUri()
-                        )
+                        val defaultConfig = getServiceConfiguration(domain)
                         AuthState(defaultConfig)
                     }
                 }
@@ -150,14 +145,14 @@ class KindeSDK(
     private var runtimeClientId: String? = null
 
     private var store: Store
-    private var tokenRepository: TokenRepository
+    private lateinit var tokenRepository: TokenRepository
     private val apiClient: ApiClient
-    private var keysApi: KeysApi
-    private var oAuthApi: OAuthApi
-    private var usersApi: UsersApi
-    private var permissionsApi: PermissionsApi
-    private var rolesApi: RolesApi
-    private var featureFlagsApi: FeatureFlagsApi
+    private lateinit var keysApi: KeysApi
+    private lateinit var oAuthApi: OAuthApi
+    private lateinit var usersApi: UsersApi
+    private lateinit var permissionsApi: PermissionsApi
+    private lateinit var rolesApi: RolesApi
+    private lateinit var featureFlagsApi: FeatureFlagsApi
 
     private val tokenRefreshHandler = Handler(Looper.getMainLooper())
     private var tokenRefreshRunnable: Runnable? = null
@@ -214,12 +209,7 @@ class KindeSDK(
             sdkListener.onException(IllegalStateException("Check your redirect urls"))
         }
 
-        serviceConfiguration = AuthorizationServiceConfiguration(
-            AUTH_URL.format(domain).toUri(),
-            TOKEN_URL.format(domain).toUri(),
-            null,
-            LOGOUT_URL.format(domain).toUri()
-        )
+        serviceConfiguration =getServiceConfiguration(domain)
 
         store = Store(activity, domain)
 
@@ -232,15 +222,7 @@ class KindeSDK(
 
         apiClient = ApiClient(HTTPS.format(domain), authNames = arrayOf(BEARER_AUTH))
 
-        tokenRepository =
-            TokenRepository(apiClient.createService(TokenApi::class.java), BuildConfig.SDK_VERSION)
-
-        keysApi = apiClient.createService(KeysApi::class.java)
-        oAuthApi = apiClient.createService(OAuthApi::class.java)
-        usersApi = apiClient.createService(UsersApi::class.java)
-        permissionsApi = apiClient.createService(PermissionsApi::class.java)
-        rolesApi = apiClient.createService(RolesApi::class.java)
-        featureFlagsApi = apiClient.createService(FeatureFlagsApi::class.java)
+        createServices()
 
         initializeStoreData()
         ClaimDelegate.tokenProvider = this
@@ -347,13 +329,8 @@ class KindeSDK(
         
         // Use the effective domain for logout
         val effectiveDomain = runtimeDomain ?: domain
-        val logoutServiceConfig = AuthorizationServiceConfiguration(
-            AUTH_URL.format(effectiveDomain).toUri(),
-            TOKEN_URL.format(effectiveDomain).toUri(),
-            null,
-            LOGOUT_URL.format(effectiveDomain).toUri()
-        )
-        
+        val logoutServiceConfig = getServiceConfiguration(effectiveDomain)
+
         val endSessionRequest = EndSessionRequest.Builder(logoutServiceConfig)
             .setPostLogoutRedirectUri(logoutRedirect.toUri())
             .setAdditionalParameters(mapOf(REDIRECT_PARAM_NAME to logoutRedirect))
@@ -701,13 +678,8 @@ class KindeSDK(
         reconfigureApiClientIfNeeded(effectiveDomain)
         
         // Create service configuration with effective domain
-        val loginServiceConfig = AuthorizationServiceConfiguration(
-            AUTH_URL.format(effectiveDomain).toUri(),
-            TOKEN_URL.format(effectiveDomain).toUri(),
-            null,
-            LOGOUT_URL.format(effectiveDomain).toUri()
-        )
-        
+        val loginServiceConfig = getServiceConfiguration(effectiveDomain)
+
         val verifier =
             if (type == GrantType.PKCE) CodeVerifierUtil.generateRandomCodeVerifier() else null
         val authRequestBuilder = AuthorizationRequest.Builder(
@@ -951,12 +923,7 @@ class KindeSDK(
             store = Store(activity, effectiveDomain)
             
             // Update the state's serviceConfiguration to use the new domain
-            val newServiceConfig = AuthorizationServiceConfiguration(
-                AUTH_URL.format(effectiveDomain).toUri(),
-                TOKEN_URL.format(effectiveDomain).toUri(),
-                null,
-                LOGOUT_URL.format(effectiveDomain).toUri()
-            )
+            val newServiceConfig = getServiceConfiguration(effectiveDomain)
             synchronized(stateLock) {
                 // Load any existing state from new domain's store
                 val stateJson = store.getState()
@@ -969,20 +936,33 @@ class KindeSDK(
                 }
             }
 
-            // Recreate all service instances to use the updated Retrofit client
-            tokenRepository = TokenRepository(apiClient.createService(TokenApi::class.java), BuildConfig.SDK_VERSION)
-            keysApi = apiClient.createService(KeysApi::class.java)
-            oAuthApi = apiClient.createService(OAuthApi::class.java)
-            usersApi = apiClient.createService(UsersApi::class.java)
-            permissionsApi = apiClient.createService(PermissionsApi::class.java)
-            rolesApi = apiClient.createService(RolesApi::class.java)
-            featureFlagsApi = apiClient.createService(FeatureFlagsApi::class.java)
-            
+            createServices()
+
             // Initialize data for the new domain-specific store
             initializeStoreData()
         }
     }
-    
+
+    private fun createServices() {
+        // Recreate all service instances to use the updated Retrofit client
+        tokenRepository = TokenRepository(apiClient.createService(TokenApi::class.java), BuildConfig.SDK_VERSION)
+        keysApi = apiClient.createService(KeysApi::class.java)
+        oAuthApi = apiClient.createService(OAuthApi::class.java)
+        usersApi = apiClient.createService(UsersApi::class.java)
+        permissionsApi = apiClient.createService(PermissionsApi::class.java)
+        rolesApi = apiClient.createService(RolesApi::class.java)
+        featureFlagsApi = apiClient.createService(FeatureFlagsApi::class.java)
+    }
+
+    private fun getServiceConfiguration(effectiveDomain: String): AuthorizationServiceConfiguration {
+        return AuthorizationServiceConfiguration(
+            AUTH_URL.format(effectiveDomain).toUri(),
+            TOKEN_URL.format(effectiveDomain).toUri(),
+            null,
+            LOGOUT_URL.format(effectiveDomain).toUri()
+        )
+    }
+
     /**
      * Initializes domain-specific data including keys and authentication state.
      * This should be called when setting up the SDK or when switching domains.
