@@ -247,7 +247,7 @@ class KindeSDK(
         loginHint: String? = null,
         connectionId: String? = null
     ) {
-        login(type, orgCode, loginHint, mapOf(), connectionId, )
+        login(type, orgCode, loginHint, mapOf(), connectionId)
     }
 
     fun register(
@@ -267,7 +267,7 @@ class KindeSDK(
         if (!planInterest.isNullOrBlank()) {
             params[PLAN_INTEREST_PARAM_NAME] = planInterest
         }
-        login(type, orgCode, loginHint, params, connectionId,)
+        login(type, orgCode, loginHint, params, connectionId)
     }
 
     fun createOrg(
@@ -275,7 +275,7 @@ class KindeSDK(
         orgName: String,
         pricingTableKey: String? = null,
         planInterest: String? = null,
-        connectionId: String? = null,
+        connectionId: String? = null
     ) {
         val params = mutableMapOf<String, String>(
             REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE,
@@ -293,7 +293,7 @@ class KindeSDK(
             null,
             null,
             params,
-            connectionId,
+            connectionId
         )
     }
 
