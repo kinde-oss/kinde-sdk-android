@@ -1,6 +1,9 @@
-package au.kinde.sdk
+package au.kinde.sdk.utils
 
 import android.os.Looper
+import au.kinde.sdk.NotAuthorizedException
+import au.kinde.sdk.TokenExpiredException
+import au.kinde.sdk.WrongThreadException
 import net.openid.appauth.AuthState
 import retrofit2.Call
 import java.net.HttpURLConnection
