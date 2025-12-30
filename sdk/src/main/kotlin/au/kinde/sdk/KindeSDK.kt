@@ -61,11 +61,14 @@ class KindeSDK(
     ) { result ->
         val data = result.data
 
-        if (result.resultCode == ComponentActivity.RESULT_CANCELED && data != null) {
-            val ex = AuthorizationException.fromIntent(data)
-            ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+        if (result.resultCode == ComponentActivity.RESULT_CANCELED) {
             // Reset invitation handling flag on cancellation
             _isHandlingInvitation = false
+            // Parse exception only if data is present
+            if (data != null) {
+                val ex = AuthorizationException.fromIntent(data)
+                ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+            }
             // Re-evaluate current auth state and notify listener
             if (isAuthenticated()) {
                 state.accessToken?.let { sdkListener.onNewToken(it) }
@@ -267,6 +270,7 @@ class KindeSDK(
         val params = mutableMapOf<String, String>()
         if (!invitationCode.isNullOrBlank()) {
             _isHandlingInvitation = true
+            params[REGISTRATION_PAGE_PARAM_NAME] = REGISTRATION_PAGE_PARAM_VALUE
             params[INVITATION_CODE_PARAM_NAME] = invitationCode
             params[IS_INVITATION_PARAM_NAME] = "true"
         }
@@ -281,7 +285,7 @@ class KindeSDK(
         planInterest: String? = null,
         invitationCode: String? = null
     ) {
-        val params = mutableMapOf<String, String>(
+        val params = mutableMapOf(
             REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE
         )
         if (!pricingTableKey.isNullOrBlank()) {
@@ -304,7 +308,7 @@ class KindeSDK(
         pricingTableKey: String? = null,
         planInterest: String? = null
     ) {
-        val params = mutableMapOf<String, String>(
+        val params = mutableMapOf(
             REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE,
             CREATE_ORG_PARAM_NAME to true.toString(),
             ORG_NAME_PARAM_NAME to orgName
