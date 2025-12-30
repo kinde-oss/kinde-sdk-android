@@ -297,7 +297,8 @@ class KindeSDK(
         type: GrantType? = null,
         orgCode: String? = null,
         loginHint: String? = null,
-        invitationCode: String? = null
+        invitationCode: String? = null,
+        connectionId: String? = null
     ) {
         val params = mutableMapOf<String, String>()
         if (!invitationCode.isNullOrBlank()) {
@@ -315,7 +316,8 @@ class KindeSDK(
         loginHint: String? = null,
         pricingTableKey: String? = null,
         planInterest: String? = null,
-        invitationCode: String? = null
+        invitationCode: String? = null,
+        connectionId: String? = null
     ) {
         val params = mutableMapOf(
             REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE
@@ -331,14 +333,15 @@ class KindeSDK(
             params[INVITATION_CODE_PARAM_NAME] = invitationCode
             params[IS_INVITATION_PARAM_NAME] = "true"
         }
-        login(type, orgCode, loginHint, params)
+        login(type, orgCode, loginHint, params, connectionId)
     }
 
     fun createOrg(
         type: GrantType? = null,
         orgName: String,
         pricingTableKey: String? = null,
-        planInterest: String? = null
+        planInterest: String? = null,
+        connectionId: String? = null
     ) {
         val params = mutableMapOf(
             REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE,
@@ -355,7 +358,8 @@ class KindeSDK(
             type,
             null,
             null,
-            params
+            params,
+            connectionId
         )
     }
 
@@ -720,7 +724,8 @@ class KindeSDK(
         type: GrantType? = null,
         orgCode: String? = null,
         loginHint: String? = null,
-        additionalParams: Map<String, String>
+        additionalParams: Map<String, String>,
+        connectionId: String? = null
     ) {
         val verifier =
             if (type == GrantType.PKCE) CodeVerifierUtil.generateRandomCodeVerifier() else null
@@ -739,6 +744,9 @@ class KindeSDK(
                     }
                     orgCode?.let {
                         put(ORG_CODE_PARAM_NAME, orgCode)
+                    }
+                    connectionId?.let {
+                        put(CONNECTION_ID_PARAM_NAME, connectionId)
                     }
                 }
             )
@@ -992,6 +1000,7 @@ class KindeSDK(
         private const val ORG_CODE_PARAM_NAME = "org_code"
         private const val PRICING_TABLE_KEY_PARAM_NAME = "pricing_table_key"
         private const val PLAN_INTEREST_PARAM_NAME = "plan_interest"
+        private const val CONNECTION_ID_PARAM_NAME = "connection_id"
         private const val REDIRECT_PARAM_NAME = "redirect"
         private const val INVITATION_CODE_PARAM_NAME = "invitation_code"
         private const val IS_INVITATION_PARAM_NAME = "is_invitation"
