@@ -15,6 +15,10 @@ android {
         consumerProguardFiles "consumer-rules.pro"
     }
 
+    buildFeatures {
+        buildConfig = true
+    }
+
     buildTypes {
         all{
             buildConfigField("String", "SDK_VERSION", "\"$sdk_version\"")
