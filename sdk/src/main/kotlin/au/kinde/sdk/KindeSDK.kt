@@ -128,6 +128,10 @@ class KindeSDK(
                         AuthState(defaultConfig)
                     }
                 }
+                // Recreate service instances to use the updated Retrofit client with default domain
+                createServices()
+                // Initialize keys and auth state for the default domain
+                initializeStoreData()
             }
             
             ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
@@ -209,7 +213,7 @@ class KindeSDK(
             sdkListener.onException(IllegalStateException("Check your redirect urls"))
         }
 
-        serviceConfiguration =getServiceConfiguration(configDomain)
+        serviceConfiguration = getServiceConfiguration(configDomain)
 
         store = Store(activity, configDomain)
 
