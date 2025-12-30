@@ -64,7 +64,7 @@ class KindeSDK(
 
         if (result.resultCode == ComponentActivity.RESULT_CANCELED && data != null) {
             val ex = AuthorizationException.fromIntent(data)
-            ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+            ehanx?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
         }
 
         if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
@@ -99,6 +99,19 @@ class KindeSDK(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val data = result.data
+        
+        // Handle cancellation/failure - must reset isLoggingOut
+        if (result.resultCode == ComponentActivity.RESULT_CANCELED) {
+            synchronized(stateLock) {
+                isLoggingOut = false
+            }
+            data?.let {
+                val ex = AuthorizationException.fromIntent(it)
+                ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+            }
+            return@registerForActivityResult
+        }
+        
         if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
             val resp = EndSessionResponse.fromIntent(data)
             val ex = AuthorizationException.fromIntent(data)
@@ -110,6 +123,11 @@ class KindeSDK(
             }
             sdkListener.onLogout()
             ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
+        } else {
+            // Handle any other unexpected result code
+            synchronized(stateLock) {
+                isLoggingOut = false
+            }
         }
     }
 
