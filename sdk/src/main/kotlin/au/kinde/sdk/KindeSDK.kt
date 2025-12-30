@@ -250,8 +250,20 @@ class KindeSDK(
         val invitationCode = activity.intent?.data?.getQueryParameter(INVITATION_CODE_PARAM_NAME)
         if (!invitationCode.isNullOrEmpty()) {
             _isHandlingInvitation = true
-            // Clear the invitation code from the intent to prevent re-processing on activity recreation
-            activity.intent?.data = null
+            // Remove only the invitation_code parameter from the intent URI to prevent re-processing
+            // while preserving other query parameters, scheme, authority, path, and fragment
+            activity.intent?.data?.let { originalUri ->
+                val builder = originalUri.buildUpon().clearQuery()
+                // Rebuild query parameters excluding invitation_code
+                originalUri.queryParameterNames.forEach { paramName ->
+                    if (paramName != INVITATION_CODE_PARAM_NAME) {
+                        originalUri.getQueryParameters(paramName).forEach { value ->
+                            builder.appendQueryParameter(paramName, value)
+                        }
+                    }
+                }
+                activity.intent?.data = builder.build()
+            }
             // Post the invitation handling to run after init completes
             // This ensures the activity is fully created before launching the auth flow
             Handler(Looper.getMainLooper()).post {
@@ -420,8 +432,6 @@ class KindeSDK(
         rolesCache = null
         flagsCache = null
     }
-
-    fun isAuthenticated() = state.isAuthorized && checkToken()
 
     /**
      * Check if the SDK is currently handling an invitation code.
