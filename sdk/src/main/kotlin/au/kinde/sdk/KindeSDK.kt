@@ -115,8 +115,8 @@ class KindeSDK(
             
             if (hadRuntimeDomain) {
                 // Reset API client to default domain
-                apiClient.setBaseUrl(HTTPS.format(domain))
-                store = Store(activity, domain)
+                apiClient.setBaseUrl(HTTPS.format(configDomain))
+                store = Store(activity, configDomain)
                 // Reinitialize state with default domain
                 synchronized(stateLock) {
                     val stateJson = store.getState()
@@ -124,7 +124,7 @@ class KindeSDK(
                         AuthState.jsonDeserialize(stateJson)
                     } else {
                         // Create new state with default domain configuration
-                        val defaultConfig = getServiceConfiguration(domain)
+                        val defaultConfig = getServiceConfiguration(configDomain)
                         AuthState(defaultConfig)
                     }
                 }
@@ -134,8 +134,8 @@ class KindeSDK(
         }
     }
 
-    private val domain: String
-    private val clientId: String
+    private val configDomain: String
+    private val configClientId: String
     private val audience: String?
 
     // Runtime overrides for domain and clientId (cleared on logout)
@@ -186,13 +186,13 @@ class KindeSDK(
             PackageManager.GET_META_DATA
         )
         val metaData = appInfo.metaData
-        domain = if (metaData.containsKey(DOMAIN_KEY)) {
+        configDomain = if (metaData.containsKey(DOMAIN_KEY)) {
             metaData.getString(DOMAIN_KEY).orEmpty()
         } else {
             sdkListener.onException(IllegalStateException("$DOMAIN_KEY is not present at meta-data"))
             ""
         }
-        clientId = if (metaData.containsKey(CLIENT_ID_KEY)) {
+        configClientId = if (metaData.containsKey(CLIENT_ID_KEY)) {
             metaData.getString(CLIENT_ID_KEY).orEmpty()
         } else {
             sdkListener.onException(IllegalStateException("$CLIENT_ID_KEY is not present at meta-data"))
@@ -209,9 +209,9 @@ class KindeSDK(
             sdkListener.onException(IllegalStateException("Check your redirect urls"))
         }
 
-        serviceConfiguration =getServiceConfiguration(domain)
+        serviceConfiguration =getServiceConfiguration(configDomain)
 
-        store = Store(activity, domain)
+        store = Store(activity, configDomain)
 
         val stateJson = store.getState()
         state = if (!stateJson.isNullOrEmpty()) {
@@ -220,7 +220,7 @@ class KindeSDK(
             AuthState(serviceConfiguration)
         }
 
-        apiClient = ApiClient(HTTPS.format(domain), authNames = arrayOf(BEARER_AUTH))
+        apiClient = ApiClient(HTTPS.format(configDomain), authNames = arrayOf(BEARER_AUTH))
 
         createServices()
 
@@ -328,7 +328,7 @@ class KindeSDK(
         cancelTokenRefresh()
         
         // Use the effective domain for logout
-        val effectiveDomain = runtimeDomain ?: domain
+        val effectiveDomain = runtimeDomain ?: configDomain
         val logoutServiceConfig = getServiceConfiguration(effectiveDomain)
 
         val endSessionRequest = EndSessionRequest.Builder(logoutServiceConfig)
@@ -671,8 +671,8 @@ class KindeSDK(
         customClientId?.let { runtimeClientId = it }
         
         // Use runtime values if set, otherwise fall back to config
-        val effectiveDomain = runtimeDomain ?: domain
-        val effectiveClientId = runtimeClientId ?: clientId
+        val effectiveDomain = runtimeDomain ?: configDomain
+        val effectiveClientId = runtimeClientId ?: configClientId
         
         // Reconfigure API client if domain changed
         reconfigureApiClientIfNeeded(effectiveDomain)
