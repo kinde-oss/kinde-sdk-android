@@ -64,7 +64,7 @@ class KindeSDK(
 
         if (result.resultCode == ComponentActivity.RESULT_CANCELED && data != null) {
             val ex = AuthorizationException.fromIntent(data)
-            ehanx?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+            ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
         }
 
         if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
