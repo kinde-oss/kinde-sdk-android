@@ -16,9 +16,13 @@ import au.kinde.sdk.api.OAuthApi
 import au.kinde.sdk.api.PermissionsApi
 import au.kinde.sdk.api.RolesApi
 import au.kinde.sdk.api.UsersApi
-import au.kinde.sdk.api.model.*
 import au.kinde.sdk.api.model.entitlements.EntitlementResponse
 import au.kinde.sdk.api.model.entitlements.EntitlementsResponse
+import au.kinde.sdk.api.model.CreateUser200Response
+import au.kinde.sdk.api.model.CreateUserRequest
+import au.kinde.sdk.api.model.User
+import au.kinde.sdk.api.model.UserProfile
+import au.kinde.sdk.api.model.UserProfileV2
 import au.kinde.sdk.infrastructure.ApiClient
 import au.kinde.sdk.keys.Keys
 import au.kinde.sdk.keys.KeysApi
@@ -31,7 +35,17 @@ import au.kinde.sdk.utils.ClaimDelegate
 import au.kinde.sdk.utils.TokenProvider
 import au.kinde.sdk.utils.callApi
 import com.google.gson.Gson
-import net.openid.appauth.*
+import net.openid.appauth.AuthState
+import net.openid.appauth.AuthorizationException
+import net.openid.appauth.AuthorizationRequest
+import net.openid.appauth.AuthorizationResponse
+import net.openid.appauth.AuthorizationService
+import net.openid.appauth.AuthorizationServiceConfiguration
+import net.openid.appauth.CodeVerifierUtil
+import net.openid.appauth.EndSessionRequest
+import net.openid.appauth.EndSessionResponse
+import net.openid.appauth.ResponseTypeValues
+import net.openid.appauth.TokenRequest
 import retrofit2.Call
 import retrofit2.Callback
 import retrofit2.Response
@@ -72,8 +86,10 @@ class KindeSDK(
         if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
             val resp = AuthorizationResponse.fromIntent(data)
             val ex = AuthorizationException.fromIntent(data)
-            state.update(resp, ex)
-            store.saveState(state.jsonSerializeString())
+            synchronized(stateLock) {
+                state.update(resp, ex)
+                store.saveState(state.jsonSerializeString())
+            }
             resp?.let {
                 thread {
                     getToken(resp.createTokenExchangeRequest())
@@ -118,6 +134,7 @@ class KindeSDK(
     private var isPaused = false
     private var lastTokenUpdateTime = 0L
     private val refreshLock = Object()
+    private val stateLock = Object()
 
     @Volatile
     private var isRefreshing = false
@@ -183,7 +200,8 @@ class KindeSDK(
 
         apiClient = ApiClient(HTTPS.format(domain), authNames = arrayOf(BEARER_AUTH))
 
-        tokenRepository = TokenRepository(apiClient.createService(TokenApi::class.java), BuildConfig.SDK_VERSION)
+        tokenRepository =
+            TokenRepository(apiClient.createService(TokenApi::class.java), BuildConfig.SDK_VERSION)
 
         keysApi = apiClient.createService(KeysApi::class.java)
         oAuthApi = apiClient.createService(OAuthApi::class.java)
@@ -207,6 +225,7 @@ class KindeSDK(
         }
 
         if (!stateJson.isNullOrEmpty()) {
+            refreshState()
             if (isAuthenticated()) {
                 state.accessToken?.let { accessToken ->
                     apiClient.setBearerToken(accessToken)
@@ -225,8 +244,13 @@ class KindeSDK(
 
     fun getRefreshToken(): String? = state.refreshToken
 
-    fun login(type: GrantType? = null, orgCode: String? = null, loginHint: String? = null) {
-        login(type, orgCode, loginHint, mapOf())
+    fun login(
+        type: GrantType? = null,
+        orgCode: String? = null,
+        loginHint: String? = null,
+        connectionId: String? = null
+    ) {
+        login(type, orgCode, loginHint, mapOf(), connectionId)
     }
 
     fun register(
@@ -234,7 +258,8 @@ class KindeSDK(
         orgCode: String? = null,
         loginHint: String? = null,
         pricingTableKey: String? = null,
-        planInterest: String? = null
+        planInterest: String? = null,
+        connectionId: String? = null
     ) {
         val params = mutableMapOf<String, String>(
             REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE
@@ -245,14 +270,15 @@ class KindeSDK(
         if (!planInterest.isNullOrBlank()) {
             params[PLAN_INTEREST_PARAM_NAME] = planInterest
         }
-        login(type, orgCode, loginHint, params)
+        login(type, orgCode, loginHint, params, connectionId)
     }
 
     fun createOrg(
         type: GrantType? = null,
         orgName: String,
         pricingTableKey: String? = null,
-        planInterest: String? = null
+        planInterest: String? = null,
+        connectionId: String? = null
     ) {
         val params = mutableMapOf<String, String>(
             REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE,
@@ -269,7 +295,8 @@ class KindeSDK(
             type,
             null,
             null,
-            params
+            params,
+            connectionId
         )
     }
 
@@ -286,6 +313,35 @@ class KindeSDK(
     }
 
     /**
+     * Refreshes the authentication state from persistent storage.
+     * Call this method when you need to sync the in-memory state with storage,
+     * especially when navigating between activities that may have modified the auth state.
+     */
+    fun refreshState() {
+        synchronized(stateLock) {
+            val stateJson = store.getState()
+            if (!stateJson.isNullOrBlank()) {
+                state = AuthState.jsonDeserialize(stateJson)
+            }
+        }
+    }
+
+    /**
+     * Checks if the user is currently authenticated.
+     * This method relies on shared preferences rather than in-memory state
+     * to work correctly across multiple activities.
+     */
+    fun isAuthenticated(): Boolean {
+        synchronized(stateLock) {
+            val stateJson = store.getState()
+            if (stateJson.isNullOrBlank()) return false
+            // Temporarily deserialize to check auth status without mutating instance state
+            val currentState = AuthState.jsonDeserialize(stateJson)
+            return currentState.isAuthorized && checkTokenWithState(currentState)
+        }
+    }
+    
+    /**
      * Clears all cached API responses (permissions, roles, and feature flags).
      * Call this when you need to force fresh data on the next API call, or when switching contexts
      * (e.g., changing organizations).
@@ -295,8 +351,6 @@ class KindeSDK(
         rolesCache = null
         flagsCache = null
     }
-
-    fun isAuthenticated() = state.isAuthorized && checkToken()
 
     fun getUser(): UserProfile? = callApi(oAuthApi.getUser())
 
@@ -314,7 +368,8 @@ class KindeSDK(
         pageSize: kotlin.Int? = null,
         userId: kotlin.Int? = null,
         nextToken: kotlin.String? = null
-    ): kotlin.collections.List<User>? = callApi(usersApi.getUsers(sort, pageSize, userId, nextToken))
+    ): kotlin.collections.List<User>? =
+        callApi(usersApi.getUsers(sort, pageSize, userId, nextToken))
 
     /**
      * Get all permissions for the authenticated user
@@ -580,7 +635,8 @@ class KindeSDK(
         type: GrantType? = null,
         orgCode: String? = null,
         loginHint: String? = null,
-        additionalParams: Map<String, String>
+        additionalParams: Map<String, String>,
+        connectionId: String? = null
     ) {
         val verifier =
             if (type == GrantType.PKCE) CodeVerifierUtil.generateRandomCodeVerifier() else null
@@ -599,6 +655,9 @@ class KindeSDK(
                     }
                     orgCode?.let {
                         put(ORG_CODE_PARAM_NAME, orgCode)
+                    }
+                    connectionId?.let {
+                        put(CONNECTION_ID_PARAM_NAME, connectionId)
                     }
                 }
             )
@@ -641,9 +700,11 @@ class KindeSDK(
 
         if (resp != null) {
             val tokenNotExists = state.accessToken.isNullOrEmpty()
-            state.update(resp, ex)
+            synchronized(stateLock) {
+                state.update(resp, ex)
+                store.saveState(state.jsonSerializeString())
+            }
             apiClient.setBearerToken(state.accessToken.orEmpty())
-            store.saveState(state.jsonSerializeString())
             lastTokenUpdateTime = System.currentTimeMillis()
 
             if (notifyListener && (tokenNotExists || !state.accessToken.isNullOrEmpty())) {
@@ -694,15 +755,19 @@ class KindeSDK(
         return resp != null
     }
 
-    private fun checkToken(): Boolean {
-        // checkToken should only verify token signature, not trigger refresh
-        // Token refresh is handled automatically by scheduleTokenRefresh()
-        if (state.isAuthorized) {
+    /*
+    * checkToken should only verify token signature, not trigger refresh
+    * Token refresh is handled automatically by scheduleTokenRefresh()
+    */
+    private fun checkToken() = checkTokenWithState(state)
+
+    private fun checkTokenWithState(authState: AuthState): Boolean {
+        if (authState.isAuthorized) {
             store.getKeys()?.let { keysString ->
                 try {
                     gson.fromJson(keysString, Keys::class.java)?.let { keys ->
                         keys.keys.firstOrNull()?.let { key ->
-                            val jwt = state.accessToken.orEmpty()
+                            val jwt = authState.accessToken.orEmpty()
 
                             val exponentB: ByteArray = decode(key.exponent, URL_SAFE)
                             val modulusB: ByteArray = decode(key.modulus, URL_SAFE)
@@ -811,8 +876,9 @@ class KindeSDK(
     override fun onResume(owner: LifecycleOwner) {
         super.onResume(owner)
         isPaused = false
-        // Check if token needs refresh and reschedule when app comes to foreground
-        if (state.isAuthorized) {
+        // Refresh state from storage and check if token needs refresh when app comes to foreground
+        refreshState()
+        if (isAuthenticated()) {
             scheduleTokenRefresh()
         }
     }
@@ -842,6 +908,7 @@ class KindeSDK(
         private const val ORG_CODE_PARAM_NAME = "org_code"
         private const val PRICING_TABLE_KEY_PARAM_NAME = "pricing_table_key"
         private const val PLAN_INTEREST_PARAM_NAME = "plan_interest"
+        private const val CONNECTION_ID_PARAM_NAME = "connection_id"
         private const val REDIRECT_PARAM_NAME = "redirect"
 
         private const val HTTPS = "https://%s/"
