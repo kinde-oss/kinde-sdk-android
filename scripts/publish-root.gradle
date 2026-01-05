@@ -20,11 +20,14 @@ if (secretPropsFile.exists()) {
 }
 
 // Configure nmcp plugin for Maven Central Portal
-nmcp {
-    publishAggregation {
-        project(":sdk")
+nmcpAggregation {
+    centralPortal {
         username = ossrhUsername
         password = ossrhPassword
-        publicationType = "AUTOMATIC" // Automatically publish after validation
+        publishingType = "AUTOMATIC" // Automatically publish after validation
     }
+}
+
+dependencies {
+    nmcpAggregation(project(":sdk"))
 }
