@@ -111,7 +111,6 @@ class KindeSDK(
             val ex = AuthorizationException.fromIntent(data)
             apiClient.setBearerToken("")
             sdkListener.onLogout()
-            store.clearState()
 
             // Clear runtime overrides only after successful logout
             clearRuntimeOverrides()
