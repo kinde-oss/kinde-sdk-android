@@ -6,6 +6,7 @@ import androidx.appcompat.app.AppCompatActivity
 import java.io.UnsupportedEncodingException
 import java.security.InvalidAlgorithmParameterException
 import java.security.InvalidKeyException
+import java.security.MessageDigest
 import java.security.NoSuchAlgorithmException
 import java.security.spec.InvalidKeySpecException
 import java.security.spec.InvalidParameterSpecException
@@ -122,12 +123,15 @@ class Store(context: Context, private val key: String) {
         
         /**
          * Sanitizes a domain string to create a safe and unique filename.
-         * This prevents hash collisions that could occur with hashCode().
+         * Uses SHA-256 hash to guarantee uniqueness and prevent collisions
+         * between similar domains (e.g., a-b.com vs a_b.com).
          */
         private fun sanitizeDomainForFilename(domain: String): String {
-            // Replace special characters with underscores to create a safe filename
-            // This ensures each domain gets a unique prefs file without collisions
-            return domain.replace("[^a-zA-Z0-9]".toRegex(), "_")
+            // Use SHA-256 hash to guarantee unique filename for each domain
+            val digest = MessageDigest.getInstance("SHA-256")
+            val hashBytes = digest.digest(domain.toByteArray(Charsets.UTF_8))
+            // Convert to hex string (safe for filenames)
+            return hashBytes.joinToString("") { "%02x".format(it) }
         }
     }
 }
