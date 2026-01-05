@@ -239,7 +239,9 @@ class KindeSDK(
      * @param loginHint Optional login hint (email)
      * @param domain Optional domain to use for this login (overrides config)
      * @param clientId Optional client ID to use for this login (overrides config)
+     * @param connectionId Optional connection ID
      */
+    @JvmOverloads
     fun login(
         type: GrantType? = null,
         orgCode: String? = null,
@@ -261,7 +263,9 @@ class KindeSDK(
      * @param planInterest Optional plan interest
      * @param domain Optional domain to use for this registration (overrides config)
      * @param clientId Optional client ID to use for this registration (overrides config)
+     * @param connectionId Optional connection ID
      */
+    @JvmOverloads
     fun register(
         type: GrantType? = null,
         orgCode: String? = null,
@@ -293,7 +297,9 @@ class KindeSDK(
      * @param planInterest Optional plan interest
      * @param domain Optional domain to use for this operation (overrides config)
      * @param clientId Optional client ID to use for this operation (overrides config)
+     * @param connectionId Optional connection ID
      */
+    @JvmOverloads
     fun createOrg(
         type: GrantType? = null,
         orgName: String,
