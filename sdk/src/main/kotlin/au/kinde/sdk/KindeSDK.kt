@@ -117,21 +117,15 @@ class KindeSDK(
                 // Reset API client to default domain
                 apiClient.setBaseUrl(HTTPS.format(configDomain))
                 store = Store(activity, configDomain)
-                // Reinitialize state with default domain
+                // Clear default domain state to ensure user stays logged out
+                store.clearState()
+                // Reinitialize state with default domain configuration (logged out)
                 synchronized(stateLock) {
-                    val stateJson = store.getState()
-                    state = if (!stateJson.isNullOrEmpty()) {
-                        AuthState.jsonDeserialize(stateJson)
-                    } else {
-                        // Create new state with default domain configuration
-                        val defaultConfig = getServiceConfiguration(configDomain)
-                        AuthState(defaultConfig)
-                    }
+                    val defaultConfig = getServiceConfiguration(configDomain)
+                    state = AuthState(defaultConfig)
                 }
                 // Recreate service instances to use the updated Retrofit client with default domain
                 createServices()
-                // Initialize keys and auth state for the default domain
-                initializeStoreData()
             }
 
             ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
@@ -254,7 +248,7 @@ class KindeSDK(
         clientId: String? = null,
         connectionId: String? = null
     ) {
-        login(type, orgCode, loginHint, domain, clientId, connectionId)
+        login(type, orgCode, loginHint, mapOf(), domain, clientId, connectionId)
     }
 
     /**
