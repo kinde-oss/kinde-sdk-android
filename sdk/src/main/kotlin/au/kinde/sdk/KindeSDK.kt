@@ -980,6 +980,12 @@ class KindeSDK(
         if (currentBaseUrl != expectedBaseUrl) {
             // Clear cached data from the previous domain to prevent stale data issues
             clearCache()
+            
+            // Cancel any scheduled token refresh to prevent sending old tokens to new domain
+            cancelTokenRefresh()
+            
+            // Clear bearer token before switching domain to prevent token leakage
+            apiClient.setBearerToken("")
 
             apiClient.setBaseUrl(expectedBaseUrl)
 
