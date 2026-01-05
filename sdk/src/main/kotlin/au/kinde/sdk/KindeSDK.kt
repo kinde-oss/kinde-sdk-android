@@ -78,6 +78,8 @@ class KindeSDK(
         if (result.resultCode == ComponentActivity.RESULT_CANCELED && data != null) {
             val ex = AuthorizationException.fromIntent(data)
             ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+            // Clear runtime overrides on login cancel
+            clearRuntimeOverrides()
         }
 
         if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
@@ -92,7 +94,11 @@ class KindeSDK(
                     getToken(resp.createTokenExchangeRequest())
                 }
             }
-            ex?.let { sdkListener.onException(AuthException("${ex.error} ${ex.errorDescription}")) }
+            ex?.let {
+                sdkListener.onException(AuthException("${ex.error} ${ex.errorDescription}"))
+                // Clear runtime overrides on login error
+                clearRuntimeOverrides()
+            }
         }
     }
 
@@ -108,25 +114,9 @@ class KindeSDK(
             store.clearState()
 
             // Clear runtime overrides only after successful logout
-            // If there were runtime overrides, reconfigure API client back to default domain
-            val hadRuntimeDomain = runtimeDomain != null
-            runtimeDomain = null
-            runtimeClientId = null
-
-            if (hadRuntimeDomain) {
-                // Reset API client to default domain
-                apiClient.setBaseUrl(HTTPS.format(configDomain))
-                store = Store(activity, configDomain)
-                // Clear default domain state to ensure user stays logged out
-                store.clearState()
-                // Reinitialize state with default domain configuration (logged out)
-                synchronized(stateLock) {
-                    val defaultConfig = getServiceConfiguration(configDomain)
-                    state = AuthState(defaultConfig)
-                }
-                // Recreate service instances to use the updated Retrofit client with default domain
-                createServices()
-            }
+            clearRuntimeOverrides()
+            // Clear default domain state to ensure user stays logged out
+            store.clearState()
 
             ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
         }
@@ -141,6 +131,60 @@ class KindeSDK(
     private var runtimeDomain: String? = null
     @Volatile
     private var runtimeClientId: String? = null
+
+    /**
+     * Validates a domain string to ensure it's a valid hostname
+     * without scheme, path, whitespace, or special characters.
+     *
+     * Enforces RFC 1035 constraints:
+     * - Total length ≤ 255 characters
+     * - Each label (part between dots) ≤ 63 characters
+     * - Labels must start/end with alphanumeric, hyphens only in middle
+     *
+     * @param domain The domain to validate
+     * @return true if valid, false otherwise
+     */
+    private fun isValidDomain(domain: String): Boolean {
+        if (domain.isBlank()) return false
+        
+        // Check for invalid characters and patterns
+        if (domain.contains("://") ||  // no scheme
+            domain.contains("/") ||    // no path
+            domain.contains("@") ||     // no credentials
+            domain.contains(" ") ||     // no whitespace
+            domain.contains("\t") ||    // no tabs
+            domain.contains("\n") ||    // no newlines
+            domain.contains("\r")) {    // no carriage returns
+            return false
+        }
+        
+        // RFC 1035 compliant hostname validation with length constraints
+        // - Max 255 chars total
+        // - Each label max 63 chars
+        // - Labels start/end with alphanumeric, hyphens only in middle
+        val hostnameRegex = "^(?!.{256,})[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$".toRegex()
+        return hostnameRegex.matches(domain)
+    }
+
+    /**
+     * Clears runtime overrides and resets to default configuration if needed
+     */
+    private fun clearRuntimeOverrides() {
+        val hadRuntimeDomain = runtimeDomain != null
+        runtimeDomain = null
+        runtimeClientId = null
+        
+        if (hadRuntimeDomain) {
+            // Reset API client to default domain
+            apiClient.setBaseUrl(HTTPS.format(configDomain))
+            store = Store(activity, configDomain)
+            synchronized(stateLock) {
+                val defaultConfig = getServiceConfiguration(configDomain)
+                state = AuthState(defaultConfig)
+            }
+            createServices()
+        }
+    }
 
     private var store: Store
     private lateinit var tokenRepository: TokenRepository
@@ -675,8 +719,16 @@ class KindeSDK(
         customClientId: String? = null,
         connectionId: String? = null
     ) {
-        // Store runtime overrides if provided
-        customDomain?.let { runtimeDomain = it }
+        // Validate and store runtime overrides if provided
+        customDomain?.let {
+            if (!isValidDomain(it)) {
+                sdkListener.onException(IllegalArgumentException(
+                    "Invalid domain: '$it'. Domain must be a valid hostname without scheme, path, or special characters."
+                ))
+                return
+            }
+            runtimeDomain = it
+        }
         customClientId?.let { runtimeClientId = it }
 
         // Use runtime values if set, otherwise fall back to config
