@@ -1038,14 +1038,20 @@ class KindeSDK(
      * This should be called when setting up the SDK or when switching domains.
      */
     private fun initializeStoreData() {
+        // Capture store reference to prevent race condition if domain switches during async request
+        val storeForRequest = store
+        
         // Fetch and store keys for the domain if not already present
-        if (store.getKeys().isNullOrEmpty()) {
+        if (storeForRequest.getKeys().isNullOrEmpty()) {
             keysApi.getKeys().enqueue(object : Callback<Keys> {
                 override fun onResponse(call: Call<Keys>, response: Response<Keys>) {
                     response.body()?.let { keys ->
-                        store.saveKeys(gson.toJson(keys))
-                        // Now that keys are available, set up auth state
-                        setupAuthState()
+                        // Use captured store reference to ensure keys are saved to correct store
+                        storeForRequest.saveKeys(gson.toJson(keys))
+                        // Only set up auth state if this store is still the current one
+                        if (store == storeForRequest) {
+                            setupAuthState()
+                        }
                     }
                 }
 
