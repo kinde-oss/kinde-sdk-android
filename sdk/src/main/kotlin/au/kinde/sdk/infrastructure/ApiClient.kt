@@ -118,7 +118,13 @@ class ApiClient(
     }
     
     /**
-     * Updates the base URL for API calls
+     * Updates the base URL for API calls.
+     * 
+     * IMPORTANT: This only updates the Retrofit builder. Any service instances
+     * created before this call will still use the old base URL. Callers MUST
+     * recreate all service instances (via createService()) after calling this
+     * method to ensure they use the new base URL.
+     * 
      * @param newBaseUrl The new base URL
      * @return ApiClient
      */
