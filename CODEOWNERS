@@ -1,5 +1,15 @@
+# Default owners for everything
 * @kinde-oss/giants-kinde
+
+# Dependency-related files for this repo
 build.gradle @kinde-oss/sdk-engineers
 **/build.gradle @kinde-oss/sdk-engineers
-build.gradle @kinde-oss/sdk-engineers
-**/build.gradle @kinde-oss/sdk-engineers
+build.gradle.kts @kinde-oss/sdk-engineers
+**/build.gradle.kts @kinde-oss/sdk-engineers
+settings.gradle @kinde-oss/sdk-engineers
+settings.gradle.kts @kinde-oss/sdk-engineers
+gradle.properties @kinde-oss/sdk-engineers
+**/gradle.properties @kinde-oss/sdk-engineers
+libs.versions.toml @kinde-oss/sdk-engineers
+**/libs.versions.toml @kinde-oss/sdk-engineers
+gradle/wrapper/** @kinde-oss/sdk-engineers
