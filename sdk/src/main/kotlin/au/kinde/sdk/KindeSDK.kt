@@ -247,8 +247,6 @@ class KindeSDK(
      * @param type The grant type (PKCE or implicit)
      * @param orgCode Optional organization code
      * @param loginHint Optional login hint (email)
-     * @param domain Optional domain to use for this login (overrides config)
-     * @param clientId Optional client ID to use for this login (overrides config)
      * @param connectionId Optional connection ID
      */
     @JvmOverloads
@@ -269,8 +267,6 @@ class KindeSDK(
      * @param loginHint Optional login hint (email)
      * @param pricingTableKey Optional pricing table key
      * @param planInterest Optional plan interest
-     * @param domain Optional domain to use for this registration (overrides config)
-     * @param clientId Optional client ID to use for this registration (overrides config)
      * @param connectionId Optional connection ID
      */
     @JvmOverloads
@@ -301,8 +297,6 @@ class KindeSDK(
      * @param orgName The name of the organization to create
      * @param pricingTableKey Optional pricing table key
      * @param planInterest Optional plan interest
-     * @param domain Optional domain to use for this operation (overrides config)
-     * @param clientId Optional client ID to use for this operation (overrides config)
      * @param connectionId Optional connection ID
      */
     @JvmOverloads
