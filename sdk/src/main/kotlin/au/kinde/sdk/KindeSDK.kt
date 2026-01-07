@@ -241,6 +241,17 @@ class KindeSDK(
 
     fun getRefreshToken(): String? = state.refreshToken
 
+    /**
+     * Initiate login flow
+     *
+     * @param type The grant type (PKCE or implicit)
+     * @param orgCode Optional organization code
+     * @param loginHint Optional login hint (email)
+     * @param domain Optional domain to use for this login (overrides config)
+     * @param clientId Optional client ID to use for this login (overrides config)
+     * @param connectionId Optional connection ID
+     */
+    @JvmOverloads
     fun login(
         type: GrantType? = null,
         orgCode: String? = null,
@@ -250,6 +261,19 @@ class KindeSDK(
         login(type, orgCode, loginHint, mapOf(), connectionId)
     }
 
+    /**
+     * Initiate registration flow
+     *
+     * @param type The grant type (PKCE or implicit)
+     * @param orgCode Optional organization code
+     * @param loginHint Optional login hint (email)
+     * @param pricingTableKey Optional pricing table key
+     * @param planInterest Optional plan interest
+     * @param domain Optional domain to use for this registration (overrides config)
+     * @param clientId Optional client ID to use for this registration (overrides config)
+     * @param connectionId Optional connection ID
+     */
+    @JvmOverloads
     fun register(
         type: GrantType? = null,
         orgCode: String? = null,
@@ -270,6 +294,18 @@ class KindeSDK(
         login(type, orgCode, loginHint, params, connectionId)
     }
 
+    /**
+     * Initiate organization creation flow
+     *
+     * @param type The grant type (PKCE or implicit)
+     * @param orgName The name of the organization to create
+     * @param pricingTableKey Optional pricing table key
+     * @param planInterest Optional plan interest
+     * @param domain Optional domain to use for this operation (overrides config)
+     * @param clientId Optional client ID to use for this operation (overrides config)
+     * @param connectionId Optional connection ID
+     */
+    @JvmOverloads
     fun createOrg(
         type: GrantType? = null,
         orgName: String,
