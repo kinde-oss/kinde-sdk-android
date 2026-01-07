@@ -241,6 +241,15 @@ class KindeSDK(
 
     fun getRefreshToken(): String? = state.refreshToken
 
+    /**
+     * Initiate login flow
+     *
+     * @param type The grant type (PKCE or implicit)
+     * @param orgCode Optional organization code
+     * @param loginHint Optional login hint (email)
+     * @param connectionId Optional connection ID
+     */
+    @JvmOverloads
     fun login(
         type: GrantType? = null,
         orgCode: String? = null,
@@ -250,6 +259,17 @@ class KindeSDK(
         login(type, orgCode, loginHint, mapOf(), connectionId)
     }
 
+    /**
+     * Initiate registration flow
+     *
+     * @param type The grant type (PKCE or implicit)
+     * @param orgCode Optional organization code
+     * @param loginHint Optional login hint (email)
+     * @param pricingTableKey Optional pricing table key
+     * @param planInterest Optional plan interest
+     * @param connectionId Optional connection ID
+     */
+    @JvmOverloads
     fun register(
         type: GrantType? = null,
         orgCode: String? = null,
@@ -270,6 +290,16 @@ class KindeSDK(
         login(type, orgCode, loginHint, params, connectionId)
     }
 
+    /**
+     * Initiate organization creation flow
+     *
+     * @param type The grant type (PKCE or implicit)
+     * @param orgName The name of the organization to create
+     * @param pricingTableKey Optional pricing table key
+     * @param planInterest Optional plan interest
+     * @param connectionId Optional connection ID
+     */
+    @JvmOverloads
     fun createOrg(
         type: GrantType? = null,
         orgName: String,
@@ -277,6 +307,7 @@ class KindeSDK(
         planInterest: String? = null,
         connectionId: String? = null
     ) {
+        require(orgName.isNotBlank()) { "orgName cannot be blank" }
         val params = mutableMapOf<String, String>(
             REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE,
             CREATE_ORG_PARAM_NAME to true.toString(),
