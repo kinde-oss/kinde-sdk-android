@@ -1,6 +1,7 @@
 plugins {
     id 'com.android.library'
     id 'kotlin-android'
+    id 'jacoco'
 }
 
 android {
@@ -17,11 +18,17 @@ android {
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles "consumer-rules.pro"
+        
+        // Provide default value for AppAuth redirect scheme placeholder
+        manifestPlaceholders = [appAuthRedirectScheme: 'kinde.sdk']
     }
 
     buildTypes {
         all{
             buildConfigField("String", "SDK_VERSION", "\"$sdk_version\"")
+        }
+        debug {
+            testCoverageEnabled true
         }
         release {
             minifyEnabled false
@@ -29,19 +36,97 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
     kotlinOptions {
-        jvmTarget = '1.8'
+        jvmTarget = '17'
     }
+
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+            returnDefaultValues = true
+        }
+    }
+}
+
+// JaCoCo configuration for code coverage reports
+jacoco {
+    toolVersion = "0.8.10"
+}
+
+tasks.withType(Test) {
+    jacoco.includeNoLocationClasses = true
+    jacoco.excludes = ['jdk.internal.*']
+}
+
+task jacocoTestReport(type: JacocoReport, dependsOn: ['testDebugUnitTest']) {
+    reports {
+        xml.required = true
+        html.required = true
+    }
+
+    def fileFilter = [
+        '**/R.class',
+        '**/R$*.class',
+        '**/BuildConfig.*',
+        '**/Manifest*.*',
+        '**/*Test*.*',
+        'android/**/*.*'
+    ]
+
+    def debugTree = fileTree(dir: "${buildDir}/tmp/kotlin-classes/debug", excludes: fileFilter)
+    def mainSrc = "${project.projectDir}/src/main/kotlin"
+
+    sourceDirectories.setFrom(files([mainSrc]))
+    classDirectories.setFrom(files([debugTree]))
+    executionData.setFrom(fileTree(dir: buildDir, includes: [
+        'jacoco/testDebugUnitTest.exec',
+        'outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec'
+    ]))
 }
 
 dependencies {
     implementation 'androidx.appcompat:appcompat:1.5.0'
+    
+    // Unit Testing - JUnit
     testImplementation 'junit:junit:4.13.2'
-    androidTestImplementation 'androidx.test.ext:junit:1.1.3'
-    androidTestImplementation 'androidx.test.espresso:espresso-core:3.4.0'
+    
+    // Mocking framework - MockK (Kotlin 1.7.x compatible version)
+    testImplementation 'io.mockk:mockk:1.12.8'
+    
+    // Robolectric - Run Android tests on JVM (Java 21 compatible)
+    testImplementation 'org.robolectric:robolectric:4.11.1'
+    
+    // AndroidX Test - Core testing utilities
+    testImplementation 'androidx.test:core:1.5.0'
+    testImplementation 'androidx.test:core-ktx:1.5.0'
+    testImplementation 'androidx.test.ext:junit:1.1.5'
+    testImplementation 'androidx.test.ext:junit-ktx:1.1.5'
+    
+    // MockWebServer - Mock HTTP responses for Retrofit testing
+    testImplementation 'com.squareup.okhttp3:mockwebserver:4.10.0'
+    
+    // Coroutines testing (Kotlin 1.7.x compatible version)
+    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.6.4'
+    
+    // Truth - Fluent assertions
+    testImplementation 'com.google.truth:truth:1.1.3'
+    
+    // JSON testing utilities
+    testImplementation 'org.json:json:20230227'
+    
+    // ThreeTen BP for date/time tests (same version as embedded)
+    testImplementation 'org.threeten:threetenbp:1.6.1'
+    
+    // Instrumented Testing
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test.ext:junit-ktx:1.1.5'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+    androidTestImplementation 'androidx.test:runner:1.5.2'
+    androidTestImplementation 'androidx.test:rules:1.5.0'
+    androidTestImplementation 'io.mockk:mockk-android:1.12.8'
 
     implementation "com.squareup.retrofit2:retrofit:2.9.0"
     implementation "com.squareup.retrofit2:converter-gson:2.9.0"
@@ -58,6 +143,5 @@ ext {
     PUBLISH_ARTIFACT_ID = 'android-sdk'
 }
 
-if (file("${rootProject.projectDir}/scripts/publish-module.gradle").exists()) {
-    apply from: "${rootProject.projectDir}/scripts/publish-module.gradle"
-}
+// Temporarily disabled for testing with Gradle 8
+// apply from: "${rootProject.projectDir}/scripts/publish-module.gradle"

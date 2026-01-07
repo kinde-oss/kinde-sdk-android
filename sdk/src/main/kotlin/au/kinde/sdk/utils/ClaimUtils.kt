@@ -31,6 +31,7 @@ object ClaimDelegate : ClaimApi {
     )
 
     override fun getPermissions(): ClaimData.Permissions {
+        @Suppress("UNCHECKED_CAST")
         return ClaimData.Permissions(
             getClaimInternal(ORG_CODE_CLAIM, type = String::class).orEmpty(),
             getClaimInternal(PERMISSIONS_CLAIM, type = List::class) as? List<String> ?: emptyList()
@@ -38,6 +39,7 @@ object ClaimDelegate : ClaimApi {
     }
 
     override fun getPermission(permission: String): ClaimData.Permission {
+        @Suppress("UNCHECKED_CAST")
         return ClaimData.Permission(
             getClaimInternal(ORG_CODE_CLAIM, type = String::class).orEmpty(),
             (getClaimInternal(PERMISSIONS_CLAIM, type = List::class) as? List<String>
@@ -47,6 +49,7 @@ object ClaimDelegate : ClaimApi {
     }
 
     override fun getRoles(): ClaimData.Roles {
+        @Suppress("UNCHECKED_CAST")
         return ClaimData.Roles(
             getClaimInternal(ORG_CODE_CLAIM, type = String::class).orEmpty(),
             getClaimInternal(ROLES_CLAIM, type = List::class) as? List<String> ?: emptyList()
@@ -54,6 +57,7 @@ object ClaimDelegate : ClaimApi {
     }
 
     override fun getRole(role: String): ClaimData.Role {
+        @Suppress("UNCHECKED_CAST")
         return ClaimData.Role(
             getClaimInternal(ORG_CODE_CLAIM, type = String::class).orEmpty(),
             (getClaimInternal(ROLES_CLAIM, type = List::class) as? List<String>
@@ -63,6 +67,7 @@ object ClaimDelegate : ClaimApi {
     }
 
     override fun getUserOrganizations(): ClaimData.Organizations {
+        @Suppress("UNCHECKED_CAST")
         return ClaimData.Organizations(
             getClaimInternal(ORG_CODES_CLAIM, TokenType.ID_TOKEN, List::class) as? List<String>
                 ?: emptyList()
@@ -144,6 +149,7 @@ object ClaimDelegate : ClaimApi {
             val decoded = decodeToken(token)
             val data = JSONObject(decoded)
             if (data.has(claim)) {
+                @Suppress("UNCHECKED_CAST")
                 when (type) {
                     List::class -> {
                         val list = data.getJSONArray(claim)

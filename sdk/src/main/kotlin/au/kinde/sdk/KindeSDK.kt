@@ -101,7 +101,6 @@ class KindeSDK(
     ) { result ->
         val data = result.data
         if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
-            val resp = EndSessionResponse.fromIntent(data)
             val ex = AuthorizationException.fromIntent(data)
             apiClient.setBearerToken("")
             sdkListener.onLogout()
@@ -511,7 +510,7 @@ class KindeSDK(
             val flag = flags[code]
             when {
                 flag == null -> defaultValue
-                flag.value is Boolean -> flag.value as Boolean
+                flag.value is Boolean -> flag.value
                 else -> {
                     android.util.Log.w("KindeSDK", "Flag '$code' type mismatch: expected Boolean, got ${flag.type}")
                     defaultValue
@@ -540,7 +539,7 @@ class KindeSDK(
             val flag = flags[code]
             when {
                 flag == null -> defaultValue
-                flag.value is String -> flag.value as String
+                flag.value is String -> flag.value
                 else -> {
                     android.util.Log.w("KindeSDK", "Flag '$code' type mismatch: expected String, got ${flag.type}")
                     defaultValue
@@ -569,7 +568,7 @@ class KindeSDK(
             val flag = flags[code]
             when {
                 flag == null -> defaultValue
-                flag.value is Number -> (flag.value as Number).toInt()
+                flag.value is Number -> flag.value.toInt()
                 else -> {
                     android.util.Log.w("KindeSDK", "Flag '$code' type mismatch: expected Integer, got ${flag.type}")
                     defaultValue
