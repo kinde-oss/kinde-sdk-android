@@ -167,7 +167,6 @@ class KindeSDK(
     private var lastTokenUpdateTime = 0L
     private val stateLock = Object()
     private val refreshLock = Object()
-    private val stateLock = Object()
 
     @Volatile
     private var isRefreshing = false
