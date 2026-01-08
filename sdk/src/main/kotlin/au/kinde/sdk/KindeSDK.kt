@@ -84,6 +84,7 @@ class KindeSDK(
                 ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
             }
             // Re-evaluate current auth state and notify listener
+            refreshState()
             if (isAuthenticated()) {
                 state.accessToken?.let { sdkListener.onNewToken(it) }
             } else {
@@ -108,6 +109,7 @@ class KindeSDK(
                 // Reset invitation handling flag on auth error
                 _isHandlingInvitation = false
                 // Re-evaluate current auth state and notify listener
+                refreshState()
                 if (isAuthenticated()) {
                     state.accessToken?.let { token -> sdkListener.onNewToken(token) }
                 } else {
