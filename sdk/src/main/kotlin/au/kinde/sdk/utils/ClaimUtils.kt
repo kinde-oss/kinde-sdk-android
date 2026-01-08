@@ -10,10 +10,6 @@ import org.json.JSONObject
 import kotlin.reflect.KClass
 import android.util.Log
 
-/**
- * @author roman
- * @since 1.0
- */
 object ClaimDelegate : ClaimApi {
 
     var tokenProvider: TokenProvider? = null
