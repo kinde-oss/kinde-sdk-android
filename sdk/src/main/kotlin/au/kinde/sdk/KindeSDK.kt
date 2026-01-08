@@ -40,7 +40,6 @@ import net.openid.appauth.AuthorizationService
 import net.openid.appauth.AuthorizationServiceConfiguration
 import net.openid.appauth.CodeVerifierUtil
 import net.openid.appauth.EndSessionRequest
-import net.openid.appauth.EndSessionResponse
 import net.openid.appauth.ResponseTypeValues
 import net.openid.appauth.TokenRequest
 import retrofit2.Call
@@ -127,7 +126,6 @@ class KindeSDK(
         }
         
         if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
-            val resp = EndSessionResponse.fromIntent(data)
             val ex = AuthorizationException.fromIntent(data)
             synchronized(stateLock) {
                 apiClient.setBearerToken("")
