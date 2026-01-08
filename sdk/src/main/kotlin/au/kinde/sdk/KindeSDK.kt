@@ -70,79 +70,6 @@ class KindeSDK(
 
     private val authService = AuthorizationService(activity)
 
-    private val launcher = activity.registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val data = result.data
-
-        if (result.resultCode == ComponentActivity.RESULT_CANCELED && data != null) {
-            val ex = AuthorizationException.fromIntent(data)
-            ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
-        }
-
-        if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
-            val resp = AuthorizationResponse.fromIntent(data)
-            val ex = AuthorizationException.fromIntent(data)
-            synchronized(stateLock) {
-                if (isLoggingOut) return@registerForActivityResult
-                state.update(resp, ex)
-                store.saveState(state.jsonSerializeString())
-            }
-            resp?.let {
-                thread {
-                    synchronized(stateLock) {
-                        if (isLoggingOut) return@thread
-                        activeBackgroundOperations++
-                    }
-                    try {
-                        getToken(resp.createTokenExchangeRequest())
-                    } finally {
-                        synchronized(stateLock) {
-                            activeBackgroundOperations--
-                            stateLock.notifyAll()
-                        }
-                    }
-                }
-            }
-            ex?.let { sdkListener.onException(AuthException("${ex.error} ${ex.errorDescription}")) }
-        }
-    }
-
-    private val endTokenLauncher = activity.registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val data = result.data
-        
-        // Handle cancellation/failure - must reset isLoggingOut
-        if (result.resultCode == ComponentActivity.RESULT_CANCELED) {
-            synchronized(stateLock) {
-                isLoggingOut = false
-            }
-            data?.let {
-                val ex = AuthorizationException.fromIntent(it)
-                ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
-            }
-            return@registerForActivityResult
-        }
-        
-        if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
-            val ex = AuthorizationException.fromIntent(data)
-            synchronized(stateLock) {
-                apiClient.setBearerToken("")
-                store.clearState()
-                state = AuthState(serviceConfiguration)
-                isLoggingOut = false
-            }
-            sdkListener.onLogout()
-            ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
-        } else {
-            // Handle any other unexpected result code
-            synchronized(stateLock) {
-                isLoggingOut = false
-            }
-        }
-    }
-
     private val domain: String
     private val clientId: String
     private val audience: String?
@@ -271,6 +198,79 @@ class KindeSDK(
             sdkListener.onLogout()
         }
         ClaimDelegate.tokenProvider = this
+    }
+
+    private val launcher = activity.registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val data = result.data
+
+        if (result.resultCode == ComponentActivity.RESULT_CANCELED && data != null) {
+            val ex = AuthorizationException.fromIntent(data)
+            ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+        }
+
+        if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
+            val resp = AuthorizationResponse.fromIntent(data)
+            val ex = AuthorizationException.fromIntent(data)
+            synchronized(stateLock) {
+                if (isLoggingOut) return@registerForActivityResult
+                state.update(resp, ex)
+                store.saveState(state.jsonSerializeString())
+            }
+            resp?.let {
+                thread {
+                    synchronized(stateLock) {
+                        if (isLoggingOut) return@thread
+                        activeBackgroundOperations++
+                    }
+                    try {
+                        getToken(resp.createTokenExchangeRequest())
+                    } finally {
+                        synchronized(stateLock) {
+                            activeBackgroundOperations--
+                            stateLock.notifyAll()
+                        }
+                    }
+                }
+            }
+            ex?.let { sdkListener.onException(AuthException("${ex.error} ${ex.errorDescription}")) }
+        }
+    }
+
+    private val endTokenLauncher = activity.registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val data = result.data
+        
+        // Handle cancellation/failure - must reset isLoggingOut
+        if (result.resultCode == ComponentActivity.RESULT_CANCELED) {
+            synchronized(stateLock) {
+                isLoggingOut = false
+            }
+            data?.let {
+                val ex = AuthorizationException.fromIntent(it)
+                ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+            }
+            return@registerForActivityResult
+        }
+        
+        if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
+            val ex = AuthorizationException.fromIntent(data)
+            synchronized(stateLock) {
+                apiClient.setBearerToken("")
+                store.clearState()
+                state = AuthState(serviceConfiguration)
+                isLoggingOut = false
+            }
+            sdkListener.onLogout()
+            ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
+        } else {
+            // Handle any other unexpected result code
+            synchronized(stateLock) {
+                isLoggingOut = false
+            }
+        }
     }
 
     override fun getToken(tokenType: TokenType): String? =
