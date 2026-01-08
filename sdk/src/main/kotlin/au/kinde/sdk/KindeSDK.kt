@@ -85,13 +85,15 @@ class KindeSDK(
                 ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
             }
             
-            // If cancelling during invitation flow, don't notify auth state callbacks
+            // Always sync in-memory state with storage
+            refreshState()
+            
+            // Skip listener notifications during invitation cancellations
             if (wasHandlingInvitation) {
                 return@registerForActivityResult
             }
             
             // Normal cancellation handling (non-invitation flows)
-            refreshState()
             if (isAuthenticated()) {
                 state.accessToken?.let { sdkListener.onNewToken(it) }
             } else {
@@ -166,6 +168,7 @@ class KindeSDK(
     private var _isHandlingInvitation = false
     
     // Store the processed invitation code to prevent duplicate handling
+    @Volatile
     private var processedInvitationCode: String? = null
 
     // Cache infrastructure for API responses
@@ -258,14 +261,21 @@ class KindeSDK(
         if (!invitationCode.isNullOrEmpty() && processedInvitationCode != invitationCode) {
             processedInvitationCode = invitationCode
             _isHandlingInvitation = true
-            // Use lifecycle observer to handle invitation after activity is resumed
-            // This ensures the activity is fully initialized before launching the auth flow
-            activity.lifecycle.addObserver(object : DefaultLifecycleObserver {
-                override fun onResume(owner: LifecycleOwner) {
-                    owner.lifecycle.removeObserver(this)
+            // Check if already resumed; if so, handle immediately, otherwise use observer
+            if (activity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                // Already resumed, handle invitation immediately
+                Handler(Looper.getMainLooper()).post {
                     handleInvitation(invitationCode)
                 }
-            })
+            } else {
+                // Use lifecycle observer to handle invitation after activity is resumed
+                activity.lifecycle.addObserver(object : DefaultLifecycleObserver {
+                    override fun onResume(owner: LifecycleOwner) {
+                        owner.lifecycle.removeObserver(this)
+                        handleInvitation(invitationCode)
+                    }
+                })
+            }
         }
 
         // Skip normal auth callbacks if handling invitation
