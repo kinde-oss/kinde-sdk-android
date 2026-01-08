@@ -1,11 +1,16 @@
 plugins {
     id 'com.android.library'
-    id 'com.kezong.fat-aar'
     id 'kotlin-android'
+    id 'com.gradleup.nmcp'
 }
 
 android {
+    namespace 'au.kinde.sdk'
     compileSdk compile_version
+    
+    buildFeatures {
+        buildConfig = true
+    }
 
     defaultConfig {
         minSdk 21
@@ -42,12 +47,11 @@ dependencies {
     implementation "com.squareup.retrofit2:retrofit:2.9.0"
     implementation "com.squareup.retrofit2:converter-gson:2.9.0"
     implementation "androidx.browser:browser:1.4.0"
-
-    embed("net.openid:appauth:0.11.1") {
-        transitive = true
-    }
-    embed "com.squareup.retrofit2:converter-scalars:2.9.0"
-    embed "org.threeten:threetenbp:1.6.1"
+    
+    // Previously embedded, now declared as regular dependencies
+    api "net.openid:appauth:0.11.1"
+    implementation "com.squareup.retrofit2:converter-scalars:2.9.0"
+    implementation "org.threeten:threetenbp:1.6.1"
 }
 
 ext {
@@ -55,4 +59,6 @@ ext {
     PUBLISH_ARTIFACT_ID = 'android-sdk'
 }
 
-apply from: "${rootProject.projectDir}/scripts/publish-module.gradle"
+if (file("${rootProject.projectDir}/scripts/publish-module.gradle").exists()) {
+    apply from: "${rootProject.projectDir}/scripts/publish-module.gradle"
+}
