@@ -6,6 +6,7 @@ import androidx.appcompat.app.AppCompatActivity
 import java.io.UnsupportedEncodingException
 import java.security.InvalidAlgorithmParameterException
 import java.security.InvalidKeyException
+import java.security.MessageDigest
 import java.security.NoSuchAlgorithmException
 import java.security.spec.InvalidKeySpecException
 import java.security.spec.InvalidParameterSpecException
@@ -25,8 +26,12 @@ import kotlin.random.Random.Default.nextBytes
  */
 class Store(context: Context, private val key: String) {
 
+    // Create domain-specific SharedPreferences file to isolate state across domains
+    // Sanitize the domain to create a safe filename (replace special chars with underscores)
+    private val prefsName = "${PREFS_NAME}_${sanitizeDomainForFilename(key)}"
+    
     private val authPrefs = context.getSharedPreferences(
-        PREFS_NAME,
+        prefsName,
         AppCompatActivity.MODE_PRIVATE
     )
 
@@ -115,5 +120,18 @@ class Store(context: Context, private val key: String) {
         private const val KEY_SIZE = 16
         private const val ALGORITHM = "AES"
         private const val TRANSFORMATION = "$ALGORITHM/CBC/PKCS5Padding"
+        
+        /**
+         * Sanitizes a domain string to create a safe and unique filename.
+         * Uses SHA-256 hash to guarantee uniqueness and prevent collisions
+         * between similar domains (e.g., a-b.com vs a_b.com).
+         */
+        private fun sanitizeDomainForFilename(domain: String): String {
+            // Use SHA-256 hash to guarantee unique filename for each domain
+            val digest = MessageDigest.getInstance("SHA-256")
+            val hashBytes = digest.digest(domain.toByteArray(Charsets.UTF_8))
+            // Convert to hex string (safe for filenames)
+            return hashBytes.joinToString("") { "%02x".format(it) }
+        }
     }
 }

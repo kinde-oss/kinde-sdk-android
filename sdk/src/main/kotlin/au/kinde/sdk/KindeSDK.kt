@@ -55,7 +55,7 @@ import au.kinde.sdk.model.ClaimData
 import au.kinde.sdk.model.Flag
 
 class KindeSDK(
-    activity: ComponentActivity,
+    private val activity: ComponentActivity,
     private val loginRedirect: String,
     private val logoutRedirect: String,
     private val scopes: List<String> = DEFAULT_SCOPES,
@@ -78,6 +78,8 @@ class KindeSDK(
         if (result.resultCode == ComponentActivity.RESULT_CANCELED && data != null) {
             val ex = AuthorizationException.fromIntent(data)
             ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+            // Clear runtime overrides on login cancel
+            clearRuntimeOverrides()
         }
 
         if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
@@ -92,7 +94,11 @@ class KindeSDK(
                     getToken(resp.createTokenExchangeRequest())
                 }
             }
-            ex?.let { sdkListener.onException(AuthException("${ex.error} ${ex.errorDescription}")) }
+            ex?.let {
+                sdkListener.onException(AuthException("${ex.error} ${ex.errorDescription}"))
+                // Clear runtime overrides on login error
+                clearRuntimeOverrides()
+            }
         }
     }
 
@@ -104,25 +110,116 @@ class KindeSDK(
             val resp = EndSessionResponse.fromIntent(data)
             val ex = AuthorizationException.fromIntent(data)
             apiClient.setBearerToken("")
-            sdkListener.onLogout()
+
+            // Clear runtime domain state before resetting to default domain
             store.clearState()
+            // Clear runtime overrides after clearing runtime state
+            clearRuntimeOverrides()
+
+            sdkListener.onLogout()
+
             ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
         }
     }
 
-    private val domain: String
-    private val clientId: String
+    private val configDomain: String
+    private val configClientId: String
     private val audience: String?
 
-    private val store: Store
-    private val tokenRepository: TokenRepository
+    // Runtime overrides for domain and clientId (cleared on logout)
+    @Volatile
+    private var runtimeDomain: String? = null
+
+    @Volatile
+    private var runtimeClientId: String? = null
+
+    /**
+     * Validates a domain string to ensure it's a valid hostname
+     * without scheme, path, whitespace, or special characters.
+     *
+     * Enforces RFC 1035 constraints:
+     * - Total length ≤ 255 characters
+     * - Each label (part between dots) ≤ 63 characters
+     * - Labels must start/end with alphanumeric, hyphens only in middle
+     *
+     * @param domain The domain to validate
+     * @return true if valid, false otherwise
+     */
+    private fun isValidDomain(domain: String): Boolean {
+        if (domain.isBlank()) return false
+
+        // Check for invalid characters and patterns
+        if (domain.contains("://") ||  // no scheme
+            domain.contains("/") ||    // no path
+            domain.contains("@") ||     // no credentials
+            domain.contains(" ") ||     // no whitespace
+            domain.contains("\t") ||    // no tabs
+            domain.contains("\n") ||    // no newlines
+            domain.contains("\r")
+        ) {    // no carriage returns
+            return false
+        }
+
+        // RFC 1035 compliant hostname validation with length constraints
+        // - Max 255 chars total
+        // - Each label max 63 chars
+        // - Labels start/end with alphanumeric, hyphens only in middle
+        val hostnameRegex =
+            "^(?!.{256,})[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$".toRegex()
+        return hostnameRegex.matches(domain)
+    }
+
+    /**
+     * Validates a client ID string to ensure it's non-blank
+     * and contains no whitespace or control characters.
+     *
+     * @param clientId The client ID to validate
+     * @return true if valid, false otherwise
+     */
+    private fun isValidClientId(clientId: String): Boolean {
+        if (clientId.isBlank()) return false
+
+        // Check for whitespace and control characters
+        if (clientId.contains(" ") ||     // no spaces
+            clientId.contains("\t") ||    // no tabs
+            clientId.contains("\n") ||    // no newlines
+            clientId.contains("\r")
+        ) {    // no carriage returns
+            return false
+        }
+
+        return true
+    }
+
+    /**
+     * Clears runtime overrides and resets to default configuration if needed
+     */
+    private fun clearRuntimeOverrides() {
+        val hadRuntimeDomain = runtimeDomain != null
+        runtimeDomain = null
+        runtimeClientId = null
+
+        if (hadRuntimeDomain) {
+            // Reset API client to default domain
+            apiClient.setBaseUrl(HTTPS.format(configDomain))
+            store = Store(activity, configDomain)
+            synchronized(stateLock) {
+                val defaultConfig = getServiceConfiguration(configDomain)
+                state = AuthState(defaultConfig)
+            }
+            createServices()
+        }
+    }
+
+    private var store: Store
+    private lateinit var tokenRepository: TokenRepository
     private val apiClient: ApiClient
-    private val keysApi: KeysApi
-    private val oAuthApi: OAuthApi
-    private val usersApi: UsersApi
-    private val permissionsApi: PermissionsApi
-    private val rolesApi: RolesApi
-    private val featureFlagsApi: FeatureFlagsApi
+    private lateinit var keysApi: KeysApi
+    private lateinit var oAuthApi: OAuthApi
+    private lateinit var usersApi: UsersApi
+    private lateinit var permissionsApi: PermissionsApi
+    private lateinit var rolesApi: RolesApi
+    private lateinit var featureFlagsApi: FeatureFlagsApi
 
     private val tokenRefreshHandler = Handler(Looper.getMainLooper())
     private var tokenRefreshRunnable: Runnable? = null
@@ -132,6 +229,7 @@ class KindeSDK(
     private var lastTokenUpdateTime = 0L
     private val refreshLock = Object()
     private val stateLock = Object()
+    private val domainSwitchLock = Object()
 
     @Volatile
     private var isRefreshing = false
@@ -144,8 +242,10 @@ class KindeSDK(
 
     @Volatile
     private var permissionsCache: CacheEntry<ClaimData.Permissions>? = null
+
     @Volatile
     private var rolesCache: CacheEntry<ClaimData.Roles>? = null
+
     @Volatile
     private var flagsCache: CacheEntry<Map<String, Flag>>? = null
 
@@ -156,13 +256,13 @@ class KindeSDK(
             PackageManager.GET_META_DATA
         )
         val metaData = appInfo.metaData
-        domain = if (metaData.containsKey(DOMAIN_KEY)) {
+        configDomain = if (metaData.containsKey(DOMAIN_KEY)) {
             metaData.getString(DOMAIN_KEY).orEmpty()
         } else {
             sdkListener.onException(IllegalStateException("$DOMAIN_KEY is not present at meta-data"))
             ""
         }
-        clientId = if (metaData.containsKey(CLIENT_ID_KEY)) {
+        configClientId = if (metaData.containsKey(CLIENT_ID_KEY)) {
             metaData.getString(CLIENT_ID_KEY).orEmpty()
         } else {
             sdkListener.onException(IllegalStateException("$CLIENT_ID_KEY is not present at meta-data"))
@@ -179,14 +279,9 @@ class KindeSDK(
             sdkListener.onException(IllegalStateException("Check your redirect urls"))
         }
 
-        serviceConfiguration = AuthorizationServiceConfiguration(
-            AUTH_URL.format(domain).toUri(),
-            TOKEN_URL.format(domain).toUri(),
-            null,
-            LOGOUT_URL.format(domain).toUri()
-        )
+        serviceConfiguration = getServiceConfiguration(configDomain)
 
-        store = Store(activity, domain)
+        store = Store(activity, configDomain)
 
         val stateJson = store.getState()
         state = if (!stateJson.isNullOrEmpty()) {
@@ -195,44 +290,11 @@ class KindeSDK(
             AuthState(serviceConfiguration)
         }
 
-        apiClient = ApiClient(HTTPS.format(domain), authNames = arrayOf(BEARER_AUTH))
+        apiClient = ApiClient(HTTPS.format(configDomain), authNames = arrayOf(BEARER_AUTH))
 
-        tokenRepository =
-            TokenRepository(apiClient.createService(TokenApi::class.java), BuildConfig.SDK_VERSION)
+        createServices()
 
-        keysApi = apiClient.createService(KeysApi::class.java)
-        oAuthApi = apiClient.createService(OAuthApi::class.java)
-        usersApi = apiClient.createService(UsersApi::class.java)
-        permissionsApi = apiClient.createService(PermissionsApi::class.java)
-        rolesApi = apiClient.createService(RolesApi::class.java)
-        featureFlagsApi = apiClient.createService(FeatureFlagsApi::class.java)
-
-        if (store.getKeys().isNullOrEmpty()) {
-            keysApi.getKeys().enqueue(object : Callback<Keys> {
-                override fun onResponse(call: Call<Keys>, response: Response<Keys>) {
-                    response.body()?.let { keys ->
-                        store.saveKeys(gson.toJson(keys))
-                    }
-                }
-
-                override fun onFailure(call: Call<Keys>, t: Throwable) {
-                    sdkListener.onException(Exception(t))
-                }
-            })
-        }
-
-        if (!stateJson.isNullOrEmpty()) {
-            refreshState()
-            if (isAuthenticated()) {
-                state.accessToken?.let { accessToken ->
-                    apiClient.setBearerToken(accessToken)
-                    sdkListener.onNewToken(accessToken)
-                    scheduleTokenRefresh()
-                }
-            }
-        } else {
-            sdkListener.onLogout()
-        }
+        initializeStoreData()
         ClaimDelegate.tokenProvider = this
     }
 
@@ -247,6 +309,8 @@ class KindeSDK(
      * @param type The grant type (PKCE or implicit)
      * @param orgCode Optional organization code
      * @param loginHint Optional login hint (email)
+     * @param domain Optional domain to use for this login (overrides config)
+     * @param clientId Optional client ID to use for this login (overrides config)
      * @param connectionId Optional connection ID
      */
     @JvmOverloads
@@ -254,9 +318,11 @@ class KindeSDK(
         type: GrantType? = null,
         orgCode: String? = null,
         loginHint: String? = null,
+        domain: String? = null,
+        clientId: String? = null,
         connectionId: String? = null
     ) {
-        login(type, orgCode, loginHint, mapOf(), connectionId)
+        login(type, orgCode, loginHint, mapOf(), domain, clientId, connectionId)
     }
 
     /**
@@ -267,6 +333,8 @@ class KindeSDK(
      * @param loginHint Optional login hint (email)
      * @param pricingTableKey Optional pricing table key
      * @param planInterest Optional plan interest
+     * @param domain Optional domain to use for this registration (overrides config)
+     * @param clientId Optional client ID to use for this registration (overrides config)
      * @param connectionId Optional connection ID
      */
     @JvmOverloads
@@ -276,6 +344,8 @@ class KindeSDK(
         loginHint: String? = null,
         pricingTableKey: String? = null,
         planInterest: String? = null,
+        domain: String? = null,
+        clientId: String? = null,
         connectionId: String? = null
     ) {
         val params = mutableMapOf<String, String>(
@@ -287,7 +357,7 @@ class KindeSDK(
         if (!planInterest.isNullOrBlank()) {
             params[PLAN_INTEREST_PARAM_NAME] = planInterest
         }
-        login(type, orgCode, loginHint, params, connectionId)
+        login(type, orgCode, loginHint, params, domain, clientId, connectionId)
     }
 
     /**
@@ -297,6 +367,8 @@ class KindeSDK(
      * @param orgName The name of the organization to create
      * @param pricingTableKey Optional pricing table key
      * @param planInterest Optional plan interest
+     * @param domain Optional domain to use for this operation (overrides config)
+     * @param clientId Optional client ID to use for this operation (overrides config)
      * @param connectionId Optional connection ID
      */
     @JvmOverloads
@@ -305,6 +377,8 @@ class KindeSDK(
         orgName: String,
         pricingTableKey: String? = null,
         planInterest: String? = null,
+        domain: String? = null,
+        clientId: String? = null,
         connectionId: String? = null
     ) {
         require(orgName.isNotBlank()) { "orgName cannot be blank" }
@@ -324,6 +398,8 @@ class KindeSDK(
             null,
             null,
             params,
+            domain,
+            clientId,
             connectionId
         )
     }
@@ -331,13 +407,21 @@ class KindeSDK(
     fun logout() {
         clearCache()
         cancelTokenRefresh()
-        val endSessionRequest = EndSessionRequest.Builder(serviceConfiguration)
+
+        // Use the effective domain for logout
+        val effectiveDomain = runtimeDomain ?: configDomain
+        val logoutServiceConfig = getServiceConfiguration(effectiveDomain)
+
+        val endSessionRequest = EndSessionRequest.Builder(logoutServiceConfig)
             .setPostLogoutRedirectUri(logoutRedirect.toUri())
             .setAdditionalParameters(mapOf(REDIRECT_PARAM_NAME to logoutRedirect))
             .setState(null)
             .build()
         val endSessionIntent = authService.getEndSessionRequestIntent(endSessionRequest)
         endTokenLauncher.launch(endSessionIntent)
+
+        // Note: Runtime overrides are cleared in endTokenLauncher callback
+        // only after successful logout to avoid inconsistent state if cancelled
     }
 
     /**
@@ -368,7 +452,7 @@ class KindeSDK(
             return currentState.isAuthorized && checkTokenWithState(currentState)
         }
     }
-    
+
     /**
      * Clears all cached API responses (permissions, roles, and feature flags).
      * Call this when you need to force fresh data on the next API call, or when switching contexts
@@ -651,7 +735,7 @@ class KindeSDK(
         if (options.useCache) {
             flagsCache = CacheEntry(flags, System.currentTimeMillis())
         }
-        
+
         return flags
     }
 
@@ -660,13 +744,49 @@ class KindeSDK(
         orgCode: String? = null,
         loginHint: String? = null,
         additionalParams: Map<String, String>,
+        customDomain: String? = null,
+        customClientId: String? = null,
         connectionId: String? = null
     ) {
+        // Validate and store runtime overrides if provided
+        customDomain?.let {
+            if (!isValidDomain(it)) {
+                sdkListener.onException(
+                    IllegalArgumentException(
+                        "Invalid domain: '$it'. Domain must be a valid hostname without scheme, path, or special characters."
+                    )
+                )
+                return
+            }
+            runtimeDomain = it
+        }
+        customClientId?.let {
+            if (!isValidClientId(it)) {
+                sdkListener.onException(
+                    IllegalArgumentException(
+                        "Invalid client ID: '$it'. Client ID must be non-blank and contain no whitespace or control characters."
+                    )
+                )
+                return
+            }
+            runtimeClientId = it
+        }
+
+        // Use runtime values if set, otherwise fall back to config
+        val effectiveDomain = runtimeDomain ?: configDomain
+        val effectiveClientId = runtimeClientId ?: configClientId
+
+        // Reconfigure API client if domain changed
+        reconfigureApiClientIfNeeded(effectiveDomain)
+
+        // Create service configuration with effective domain
+        val loginServiceConfig = getServiceConfiguration(effectiveDomain)
+
         val verifier =
             if (type == GrantType.PKCE) CodeVerifierUtil.generateRandomCodeVerifier() else null
         val authRequestBuilder = AuthorizationRequest.Builder(
-            serviceConfiguration, // the authorization service configuration
-            clientId, // the client ID, typically pre-registered and static
+            loginServiceConfig, // the authorization service configuration
+            effectiveClientId, // the client ID (config or runtime override)
             ResponseTypeValues.CODE, // the response_type value: we want a code
             loginRedirect.toUri()
         )
@@ -888,6 +1008,131 @@ class KindeSDK(
     private fun cancelTokenRefresh() {
         tokenRefreshRunnable?.let { tokenRefreshHandler.removeCallbacks(it) }
         tokenRefreshRunnable = null
+    }
+
+    /**
+     * Reconfigures the API clients if the domain has changed from the originally configured domain.
+     * This ensures API calls go to the correct endpoint when using runtime domain overrides.
+     */
+    private fun reconfigureApiClientIfNeeded(effectiveDomain: String) {
+        synchronized(domainSwitchLock) {
+            val currentBaseUrl = apiClient.getBaseUrl()
+            val expectedBaseUrl = HTTPS.format(effectiveDomain)
+
+            if (currentBaseUrl != expectedBaseUrl) {
+                // Clear cached data from the previous domain to prevent stale data issues
+                clearCache()
+
+                // Cancel any scheduled token refresh to prevent sending old tokens to new domain
+                cancelTokenRefresh()
+
+                // Clear bearer token before switching domain to prevent token leakage
+                apiClient.setBearerToken("")
+
+                apiClient.setBaseUrl(expectedBaseUrl)
+
+                // Recreate Store with new domain for domain-specific SharedPreferences
+                store = Store(activity, effectiveDomain)
+
+                // Update the state's serviceConfiguration to use the new domain
+                val newServiceConfig = getServiceConfiguration(effectiveDomain)
+                synchronized(stateLock) {
+                    // Load any existing state from new domain's store
+                    val stateJson = store.getState()
+                    if (!stateJson.isNullOrEmpty()) {
+                        state = AuthState.jsonDeserialize(stateJson)
+                    } else {
+                        // Create new state with the new service configuration
+                        // This will be used for the token exchange after login
+                        state = AuthState(newServiceConfig)
+                    }
+                }
+
+                createServices()
+
+                // Initialize data for the new domain-specific store
+                initializeStoreData()
+            }
+        }
+    }
+
+    private fun createServices() {
+        // Recreate all service instances to use the updated Retrofit client
+        tokenRepository = TokenRepository(apiClient.createService(TokenApi::class.java), BuildConfig.SDK_VERSION)
+        keysApi = apiClient.createService(KeysApi::class.java)
+        oAuthApi = apiClient.createService(OAuthApi::class.java)
+        usersApi = apiClient.createService(UsersApi::class.java)
+        permissionsApi = apiClient.createService(PermissionsApi::class.java)
+        rolesApi = apiClient.createService(RolesApi::class.java)
+        featureFlagsApi = apiClient.createService(FeatureFlagsApi::class.java)
+    }
+
+    private fun getServiceConfiguration(effectiveDomain: String): AuthorizationServiceConfiguration {
+        return AuthorizationServiceConfiguration(
+            AUTH_URL.format(effectiveDomain).toUri(),
+            TOKEN_URL.format(effectiveDomain).toUri(),
+            null,
+            LOGOUT_URL.format(effectiveDomain).toUri()
+        )
+    }
+
+    /**
+     * Initializes domain-specific data including keys and authentication state.
+     * This should be called when setting up the SDK or when switching domains.
+     */
+    private fun initializeStoreData() {
+        // Capture store reference to prevent race condition if domain switches during async request
+        val storeForRequest = store
+
+        // Fetch and store keys for the domain if not already present
+        if (storeForRequest.getKeys().isNullOrEmpty()) {
+            keysApi.getKeys().enqueue(object : Callback<Keys> {
+                override fun onResponse(call: Call<Keys>, response: Response<Keys>) {
+                    response.body()?.let { keys ->
+                        // Use captured store reference to ensure keys are saved to correct store
+                        storeForRequest.saveKeys(gson.toJson(keys))
+                        // Only set up auth state if this store is still the current one
+                        if (store == storeForRequest) {
+                            setupAuthState()
+                        }
+                    }
+                }
+
+                override fun onFailure(call: Call<Keys>, t: Throwable) {
+                    sdkListener.onException(Exception(t))
+                    // Don't proceed with auth setup if keys fetch failed
+                }
+            })
+        } else {
+            // Keys already exist, set up auth state immediately
+            // Only set up if store hasn't changed
+            if (store == storeForRequest) {
+                setupAuthState()
+            }
+        }
+    }
+
+    /**
+     * Sets up authentication state after keys are confirmed to be available.
+     * This ensures signature verification can succeed.
+     */
+    private fun setupAuthState() {
+        // Load and setup authentication state from domain-specific store
+        val stateJson = store.getState()
+        if (!stateJson.isNullOrEmpty()) {
+            refreshState()
+            if (isAuthenticated()) {
+                state.accessToken?.let { accessToken ->
+                    apiClient.setBearerToken(accessToken)
+                    sdkListener.onNewToken(accessToken)
+                    scheduleTokenRefresh()
+                }
+            }
+        }
+        // Note: We don't call onLogout() when state is missing because
+        // missing state doesn't mean the user logged out - it could be
+        // first-time initialization or a domain switch during login.
+        // onLogout() is only called in the actual logout flow.
     }
 
     override fun onPause(owner: LifecycleOwner) {
