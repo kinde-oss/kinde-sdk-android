@@ -76,14 +76,21 @@ class KindeSDK(
         val data = result.data
 
         if (result.resultCode == ComponentActivity.RESULT_CANCELED) {
-            // Reset invitation handling flag on cancellation
+            val wasHandlingInvitation = _isHandlingInvitation
             _isHandlingInvitation = false
+            
             // Parse exception only if data is present
             if (data != null) {
                 val ex = AuthorizationException.fromIntent(data)
                 ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
             }
-            // Re-evaluate current auth state and notify listener
+            
+            // If cancelling during invitation flow, don't notify auth state callbacks
+            if (wasHandlingInvitation) {
+                return@registerForActivityResult
+            }
+            
+            // Normal cancellation handling (non-invitation flows)
             refreshState()
             if (isAuthenticated()) {
                 state.accessToken?.let { sdkListener.onNewToken(it) }
@@ -108,13 +115,8 @@ class KindeSDK(
                 sdkListener.onException(AuthException("${ex.error} ${ex.errorDescription}"))
                 // Reset invitation handling flag on auth error
                 _isHandlingInvitation = false
-                // Re-evaluate current auth state and notify listener
-                refreshState()
-                if (isAuthenticated()) {
-                    state.accessToken?.let { token -> sdkListener.onNewToken(token) }
-                } else {
-                    sdkListener.onLogout()
-                }
+                // Only notify logout if the error invalidates the existing session
+                // Most auth errors during a new flow don't affect existing valid sessions
             }
         }
     }
@@ -162,6 +164,9 @@ class KindeSDK(
     // Track if we're handling an invitation code (skip normal init callbacks)
     @Volatile
     private var _isHandlingInvitation = false
+    
+    // Store the processed invitation code to prevent duplicate handling
+    private var processedInvitationCode: String? = null
 
     // Cache infrastructure for API responses
     private data class CacheEntry<T>(
@@ -250,27 +255,17 @@ class KindeSDK(
 
         // Check for invitation_code in the launching intent
         val invitationCode = activity.intent?.data?.getQueryParameter(INVITATION_CODE_PARAM_NAME)
-        if (!invitationCode.isNullOrEmpty()) {
+        if (!invitationCode.isNullOrEmpty() && processedInvitationCode != invitationCode) {
+            processedInvitationCode = invitationCode
             _isHandlingInvitation = true
-            // Remove only the invitation_code parameter from the intent URI to prevent re-processing
-            // while preserving other query parameters, scheme, authority, path, and fragment
-            activity.intent?.data?.let { originalUri ->
-                val builder = originalUri.buildUpon().clearQuery()
-                // Rebuild query parameters excluding invitation_code
-                originalUri.queryParameterNames.forEach { paramName ->
-                    if (paramName != INVITATION_CODE_PARAM_NAME) {
-                        originalUri.getQueryParameters(paramName).forEach { value ->
-                            builder.appendQueryParameter(paramName, value)
-                        }
-                    }
+            // Use lifecycle observer to handle invitation after activity is resumed
+            // This ensures the activity is fully initialized before launching the auth flow
+            activity.lifecycle.addObserver(object : DefaultLifecycleObserver {
+                override fun onResume(owner: LifecycleOwner) {
+                    owner.lifecycle.removeObserver(this)
+                    handleInvitation(invitationCode)
                 }
-                activity.intent?.data = builder.build()
-            }
-            // Post the invitation handling to run after init completes
-            // This ensures the activity is fully created before launching the auth flow
-            Handler(Looper.getMainLooper()).post {
-                handleInvitation(invitationCode)
-            }
+            })
         }
 
         // Skip normal auth callbacks if handling invitation
