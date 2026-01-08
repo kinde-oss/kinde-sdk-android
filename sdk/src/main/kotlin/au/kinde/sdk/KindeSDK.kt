@@ -63,7 +63,7 @@ class KindeSDK(
 
     private val gson = Gson()
 
-    private lateinit var serviceConfiguration: AuthorizationServiceConfiguration
+    private val serviceConfiguration: AuthorizationServiceConfiguration
 
     @Volatile
     private lateinit var state: AuthState
