@@ -352,6 +352,7 @@ class KindeSDK(
         clientId: String? = null,
         connectionId: String? = null
     ) {
+        require(orgName.isNotBlank()) { "orgName cannot be blank" }
         val params = mutableMapOf<String, String>(
             REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE,
             CREATE_ORG_PARAM_NAME to true.toString(),
