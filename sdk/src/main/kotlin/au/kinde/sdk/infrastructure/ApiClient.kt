@@ -21,8 +21,10 @@ class ApiClient(
     private val apiAuthorizations = mutableMapOf<String, Interceptor>()
     var logger: ((String) -> Unit)? = null
 
-    private val retrofitBuilder: Retrofit.Builder by lazy {
-        Retrofit.Builder()
+    private var retrofitBuilder: Retrofit.Builder = createRetrofitBuilder()
+    
+    private fun createRetrofitBuilder(): Retrofit.Builder {
+        return Retrofit.Builder()
             .baseUrl(baseUrl)
             .addConverterFactory(ScalarsConverterFactory.create())
             .addConverterFactory(GsonConverterFactory.create(serializerBuilder.create()))
@@ -114,7 +116,34 @@ class ApiClient(
         this.logger = logger
         return this
     }
+    
+    /**
+     * Updates the base URL for API calls.
+     * 
+     * IMPORTANT: This only updates the Retrofit builder. Any service instances
+     * created before this call will still use the old base URL. Callers MUST
+     * recreate all service instances (via createService()) after calling this
+     * method to ensure they use the new base URL.
+     * 
+     * @param newBaseUrl The new base URL
+     * @return ApiClient
+     */
+    @Synchronized
+    fun setBaseUrl(newBaseUrl: String): ApiClient {
+        baseUrl = newBaseUrl
+        normalizeBaseUrl()
+        retrofitBuilder = createRetrofitBuilder()
+        return this
+    }
+    
+    /**
+     * Gets the current base URL
+     * @return The current base URL
+     */
+    @Synchronized
+    fun getBaseUrl(): String = baseUrl
 
+    @Synchronized
     fun <S> createService(serviceClass: Class<S>): S {
         val usedCallFactory = this.callFactory ?: clientBuilder.build()
         return retrofitBuilder.callFactory(usedCallFactory).build().create(serviceClass)
