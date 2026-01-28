@@ -2,7 +2,7 @@
 buildscript {
     ext {
         compile_version = 32
-        sdk_version = "1.4.0"
+        sdk_version = "1.4.1"
 
         kotlin_version = "1.7.10"
     }
