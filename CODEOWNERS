@@ -12,4 +12,6 @@ gradle.properties @kinde-oss/sdk-engineers
 **/gradle.properties @kinde-oss/sdk-engineers
 libs.versions.toml @kinde-oss/sdk-engineers
 **/libs.versions.toml @kinde-oss/sdk-engineers
-gradle/wrapper/** @kinde-oss/sdk-engineers
+gradle/** @kinde-oss/sdk-engineers
+gradlew @kinde-oss/sdk-engineers
+gradlew.bat @kinde-oss/sdk-engineers
