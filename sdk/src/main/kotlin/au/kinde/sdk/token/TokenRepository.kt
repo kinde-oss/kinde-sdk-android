@@ -1,6 +1,6 @@
 package au.kinde.sdk.token
 
-import au.kinde.sdk.callApi
+import au.kinde.sdk.utils.callApi
 import net.openid.appauth.AuthState
 import net.openid.appauth.AuthorizationException
 import net.openid.appauth.AuthorizationException.AuthorizationRequestErrors.SERVER_ERROR
