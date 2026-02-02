@@ -366,7 +366,15 @@ class KindeSDK(
             .setState(null)
             .build()
         val endSessionIntent = authService.getEndSessionRequestIntent(endSessionRequest)
-        endTokenLauncher.launch(endSessionIntent)
+        
+        // Ensure launcher is called on main thread
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            endTokenLauncher.launch(endSessionIntent)
+        } else {
+            tokenRefreshHandler.post {
+                endTokenLauncher.launch(endSessionIntent)
+            }
+        }
     }
 
     /**
