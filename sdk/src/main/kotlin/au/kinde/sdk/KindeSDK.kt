@@ -316,14 +316,9 @@ class KindeSDK(
         invitationCode: String? = null,
         connectionId: String? = null
     ) {
-        val params = mutableMapOf<String, String>()
         if (!invitationCode.isNullOrBlank()) {
-            _isHandlingInvitation = true
-            params[REGISTRATION_PAGE_PARAM_NAME] = REGISTRATION_PAGE_PARAM_VALUE
-            params[INVITATION_CODE_PARAM_NAME] = invitationCode
-            params[IS_INVITATION_PARAM_NAME] = "true"
+            handleInvitation(invitationCode, type, orgCode)
         }
-        login(type, orgCode, loginHint, params)
     }
 
     /**
@@ -346,7 +341,7 @@ class KindeSDK(
         invitationCode: String? = null,
         connectionId: String? = null
     ) {
-        val params = mutableMapOf(
+        val params = mutableMapOf<String, String>(
             REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE
         )
         if (!pricingTableKey.isNullOrBlank()) {
@@ -356,11 +351,8 @@ class KindeSDK(
             params[PLAN_INTEREST_PARAM_NAME] = planInterest
         }
         if (!invitationCode.isNullOrBlank()) {
-            _isHandlingInvitation = true
-            params[INVITATION_CODE_PARAM_NAME] = invitationCode
-            params[IS_INVITATION_PARAM_NAME] = "true"
+            handleInvitation(invitationCode, type, orgCode)
         }
-        login(type, orgCode, loginHint, params, connectionId)
     }
 
     /**
