@@ -400,6 +400,9 @@ class KindeSDK(
     ) {
         if (!invitationCode.isNullOrBlank()) {
             handleInvitation(invitationCode, type, orgCode)
+        } else {
+            val params = mutableMapOf<String, String>()
+            login(type, orgCode, loginHint, params, domain, clientId, connectionId)
         }
     }
 
@@ -438,6 +441,8 @@ class KindeSDK(
         }
         if (!invitationCode.isNullOrBlank()) {
             handleInvitation(invitationCode, type, orgCode)
+        } else {
+            login(type, orgCode, loginHint, params, domain, clientId, connectionId)
         }
     }
 
