@@ -76,8 +76,8 @@ class KindeSDK(
         val data = result.data
 
         if (result.resultCode == ComponentActivity.RESULT_CANCELED) {
-            val wasHandlingInvitation = _isHandlingInvitation
-            _isHandlingInvitation = false
+            val wasHandlingInvitation = invitationState.isHandling
+            invitationState.completeHandling()
             
             // Parse exception only if data is present
             if (data != null) {
@@ -116,9 +116,12 @@ class KindeSDK(
             ex?.let {
                 sdkListener.onException(AuthException("${ex.error} ${ex.errorDescription}"))
                 // Reset invitation handling flag on auth error
-                _isHandlingInvitation = false
-                // Only notify logout if the error invalidates the existing session
-                // Most auth errors during a new flow don't affect existing valid sessions
+                invitationState.completeHandling()
+                // Check if the session is still valid after the error
+                refreshState()
+                if (!isAuthenticated()) {
+                    sdkListener.onLogout()
+                }
             }
         }
     }
@@ -163,13 +166,8 @@ class KindeSDK(
     @Volatile
     private var isRefreshing = false
 
-    // Track if we're handling an invitation code (skip normal init callbacks)
-    @Volatile
-    private var _isHandlingInvitation = false
-    
-    // Store the processed invitation code to prevent duplicate handling
-    @Volatile
-    private var processedInvitationCode: String? = null
+    // Centralized invitation state management
+    private val invitationState = InvitationState()
 
     // Cache infrastructure for API responses
     private data class CacheEntry<T>(
@@ -258,15 +256,10 @@ class KindeSDK(
 
         // Check for invitation_code in the launching intent
         val invitationCode = activity.intent?.data?.getQueryParameter(INVITATION_CODE_PARAM_NAME)
-        if (!invitationCode.isNullOrEmpty() && processedInvitationCode != invitationCode) {
-            processedInvitationCode = invitationCode
-            _isHandlingInvitation = true
+        if (!invitationCode.isNullOrEmpty() && invitationState.startHandling(invitationCode)) {
             // Check if already resumed; if so, handle immediately, otherwise use observer
             if (activity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
-                // Already resumed, handle invitation immediately
-                Handler(Looper.getMainLooper()).post {
-                    handleInvitation(invitationCode)
-                }
+                handleInvitation(invitationCode)
             } else {
                 // Use lifecycle observer to handle invitation after activity is resumed
                 activity.lifecycle.addObserver(object : DefaultLifecycleObserver {
@@ -279,7 +272,7 @@ class KindeSDK(
         }
 
         // Skip normal auth callbacks if handling invitation
-        if (!_isHandlingInvitation) {
+        if (!invitationState.isHandling) {
             if (!stateJson.isNullOrEmpty()) {
                 if (isAuthenticated()) {
                     state.accessToken?.let { accessToken ->
@@ -406,7 +399,10 @@ class KindeSDK(
         type: GrantType? = null,
         orgCode: String? = null
     ) {
-        _isHandlingInvitation = true
+        if (!invitationState.startHandling(invitationCode)) {
+            // Already processed this invitation code
+            return
+        }
         val params = mutableMapOf(
             REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE,
             INVITATION_CODE_PARAM_NAME to invitationCode,
@@ -417,6 +413,7 @@ class KindeSDK(
 
     fun logout() {
         clearCache()
+        invitationState.reset()
         cancelTokenRefresh()
         val endSessionRequest = EndSessionRequest.Builder(serviceConfiguration)
             .setPostLogoutRedirectUri(logoutRedirect.toUri())
@@ -473,7 +470,7 @@ class KindeSDK(
      *
      * @return true if an invitation code was detected and is being processed
      */
-    fun isHandlingInvitation() = _isHandlingInvitation
+    fun isHandlingInvitation() = invitationState.isHandling
 
     fun getUser(): UserProfile? = callApi(oAuthApi.getUser())
 
@@ -830,8 +827,10 @@ class KindeSDK(
                 sdkListener.onNewToken(state.accessToken.orEmpty())
             }
 
-            // Reset invitation handling flag after successful authentication
-            _isHandlingInvitation = false
+            // Reset invitation handling flag after successful interactive authentication
+            if (grantType != "refresh_token") {
+                invitationState.completeHandling()
+            }
 
             // Always schedule the next refresh after successful token operation
             scheduleTokenRefresh()
