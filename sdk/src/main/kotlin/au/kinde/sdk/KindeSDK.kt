@@ -341,7 +341,7 @@ class KindeSDK(
 
         // Check for invitation_code in the launching intent
         val invitationCode = activity.intent?.data?.getQueryParameter(INVITATION_CODE_PARAM_NAME)
-        if (!invitationCode.isNullOrEmpty() && invitationState.startHandling(invitationCode)) {
+        if (!invitationCode.isNullOrEmpty() && !invitationState.isProcessed(invitationCode)) {
             // Check if already resumed; if so, handle immediately, otherwise use observer
             if (activity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
                 handleInvitation(invitationCode)
@@ -503,10 +503,13 @@ class KindeSDK(
         type: GrantType? = null,
         orgCode: String? = null
     ) {
-        if (!invitationState.startHandling(invitationCode)) {
+        if (invitationState.isProcessed(invitationCode)) {
             // Already processed this invitation code
             return
         }
+
+        invitationState.startHandling(invitationCode)
+
         val params = mutableMapOf(
             REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE,
             INVITATION_CODE_PARAM_NAME to invitationCode,

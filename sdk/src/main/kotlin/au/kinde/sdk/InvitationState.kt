@@ -19,13 +19,14 @@ class InvitationState {
         get() = _processedCode
     
     @Synchronized
-    fun startHandling(code: String): Boolean {
-        if (_processedCode == code) {
-            return false
-        }
+    fun startHandling(code: String) {
         _processedCode = code
         _isHandling = true
-        return true
+    }
+
+    @Synchronized
+    fun isProcessed(code: String): Boolean {
+        return code == processedCode
     }
 
     @Synchronized
