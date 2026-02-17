@@ -771,41 +771,51 @@ class KindeSDK(
         )
 
         if (resp != null) {
-            synchronized(stateLock) {
-                // Check if logout happened while we were getting token
-                if (isLoggingOut) {
-                    if (grantType == "refresh_token") {
-                        synchronized(refreshLock) {
-                            isRefreshing = false
-                            refreshLock.notifyAll()
-                        }
-                    } else {
+            // Check logout flag first, then clear isRefreshing if needed (avoid nested locks)
+            val wasLoggingOut = synchronized(stateLock) { isLoggingOut }
+            if (wasLoggingOut) {
+                if (grantType == "refresh_token") {
+                    synchronized(refreshLock) {
                         isRefreshing = false
+                        refreshLock.notifyAll()
                     }
-                    return false
                 }
-                
-                val tokenNotExists = state.accessToken.isNullOrEmpty()
-                state.update(resp, ex)
-                apiClient.setBearerToken(state.accessToken.orEmpty())
-                store.saveState(state.jsonSerializeString())
-                lastTokenUpdateTime = System.currentTimeMillis()
+                return false
+            }
+            
+            synchronized(stateLock) {
+                // Double-check logout flag
+                if (isLoggingOut) {
+                    // Will clear isRefreshing after releasing stateLock
+                } else {
+                    val tokenNotExists = state.accessToken.isNullOrEmpty()
+                    state.update(resp, ex)
+                    apiClient.setBearerToken(state.accessToken.orEmpty())
+                    store.saveState(state.jsonSerializeString())
+                    lastTokenUpdateTime = System.currentTimeMillis()
 
-                if (notifyListener && (tokenNotExists || !state.accessToken.isNullOrEmpty())) {
-                    sdkListener.onNewToken(state.accessToken.orEmpty())
+                    if (notifyListener && (tokenNotExists || !state.accessToken.isNullOrEmpty())) {
+                        sdkListener.onNewToken(state.accessToken.orEmpty())
+                    }
                 }
             }
 
-            // Always schedule the next refresh after successful token operation
-            scheduleTokenRefresh()
+            // Clear isRefreshing outside of stateLock to avoid nested lock
             if (grantType == "refresh_token") {
                 synchronized(refreshLock) {
                     isRefreshing = false
                     refreshLock.notifyAll()
                 }
-            } else {
-                isRefreshing = false
             }
+            
+            // Check if logout happened during state update
+            val logoutHappened = synchronized(stateLock) { isLoggingOut }
+            if (logoutHappened) {
+                return false
+            }
+
+            // Always schedule the next refresh after successful token operation
+            scheduleTokenRefresh()
         } else {
             // Check if this is a 401/invalid_grant error (invalid refresh token)
             val isInvalidRefreshToken = ex?.let { exception ->
@@ -832,8 +842,6 @@ class KindeSDK(
                         isRefreshing = false
                         refreshLock.notifyAll()
                     }
-                } else {
-                    isRefreshing = false
                 }
             }
         }
