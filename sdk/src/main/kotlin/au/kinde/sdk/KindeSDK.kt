@@ -255,8 +255,7 @@ class KindeSDK(
             return@registerForActivityResult
         }
         
-        if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
-            val ex = AuthorizationException.fromIntent(data)
+        if (result.resultCode == ComponentActivity.RESULT_OK) {
             synchronized(stateLock) {
                 apiClient.setBearerToken("")
                 store.clearState()
@@ -264,7 +263,10 @@ class KindeSDK(
                 isLoggingOut = false
             }
             sdkListener.onLogout()
-            ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
+            data?.let {
+                val ex = AuthorizationException.fromIntent(it)
+                ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
+            }
         } else {
             // Handle any other unexpected result code
             synchronized(stateLock) {
