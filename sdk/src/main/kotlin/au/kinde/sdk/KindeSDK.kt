@@ -16,6 +16,8 @@ import au.kinde.sdk.api.OAuthApi
 import au.kinde.sdk.api.PermissionsApi
 import au.kinde.sdk.api.RolesApi
 import au.kinde.sdk.api.UsersApi
+import au.kinde.sdk.api.model.entitlements.EntitlementResponse
+import au.kinde.sdk.api.model.entitlements.EntitlementsResponse
 import au.kinde.sdk.api.model.CreateUser200Response
 import au.kinde.sdk.api.model.CreateUserRequest
 import au.kinde.sdk.api.model.User
@@ -31,6 +33,7 @@ import au.kinde.sdk.token.TokenRepository
 import au.kinde.sdk.utils.ClaimApi
 import au.kinde.sdk.utils.ClaimDelegate
 import au.kinde.sdk.utils.TokenProvider
+import au.kinde.sdk.utils.callApi
 import com.google.gson.Gson
 import net.openid.appauth.AuthState
 import net.openid.appauth.AuthorizationException
@@ -467,6 +470,10 @@ class KindeSDK(
     fun getUser(): UserProfile? = callApi(oAuthApi.getUser())
 
     fun getUserProfileV2(): UserProfileV2? = callApi(oAuthApi.getUserProfileV2())
+
+    fun getEntitlement(key: String): EntitlementResponse? = callApi(oAuthApi.getEntitlement(key))
+
+    fun getEntitlements(): EntitlementsResponse? = callApi(oAuthApi.getEntitlements())
 
     fun createUser(createUserRequest: CreateUserRequest? = null): CreateUser200Response? =
         callApi(usersApi.createUser(createUserRequest))
