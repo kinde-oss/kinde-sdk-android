@@ -65,7 +65,7 @@ class KindeSDK(
 ) : TokenProvider, ClaimApi by ClaimDelegate, DefaultLifecycleObserver {
 
     private val gson = Gson()
-    private lateinit var serviceConfiguration: AuthorizationServiceConfiguration
+    private val serviceConfiguration: AuthorizationServiceConfiguration
     @Volatile
     private lateinit var state: AuthState
     private val authService = AuthorizationService(activity)
@@ -81,7 +81,7 @@ class KindeSDK(
 
             if (data != null) {
                 val ex = AuthorizationException.fromIntent(data)
-                ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+                ex?.let { sdkListener.onException(AuthException(ex.errorDescription)) }
                 clearRuntimeOverrides()
             }
 
@@ -145,6 +145,11 @@ class KindeSDK(
                     val ex = AuthorizationException.fromIntent(it)
                     ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
                 }
+
+                synchronized(stateLock) {
+                    isLoggingOut = false
+                }
+                scheduleTokenRefresh()
             }
             ComponentActivity.RESULT_OK -> {
                 apiClient.setBearerToken("")
@@ -152,7 +157,8 @@ class KindeSDK(
                 clearRuntimeOverrides()
 
                 synchronized(stateLock) {
-                    state = AuthState(serviceConfiguration)
+                    state = AuthState(getServiceConfiguration(configDomain))
+                    isLoggingOut = false
                 }
 
                 sdkListener.onLogout()
@@ -162,10 +168,6 @@ class KindeSDK(
                     ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
                 }
             }
-        }
-
-        synchronized(stateLock) {
-            isLoggingOut = false
         }
     }
 
@@ -359,17 +361,7 @@ class KindeSDK(
      */
     private fun isValidClientId(clientId: String): Boolean {
         if (clientId.isBlank()) return false
-
-        // Check for whitespace and control characters
-        if (clientId.contains(" ") ||     // no spaces
-            clientId.contains("\t") ||    // no tabs
-            clientId.contains("\n") ||    // no newlines
-            clientId.contains("\r")
-        ) {    // no carriage returns
-            return false
-        }
-
-        return true
+        return clientId.none { it.isWhitespace() || it.isISOControl() }
     }
 
     /**
@@ -1036,13 +1028,12 @@ class KindeSDK(
                 if (isLoggingOut) {
                     // Will clear isRefreshing after releasing stateLock
                 } else {
-                    val tokenNotExists = state.accessToken.isNullOrEmpty()
                     state.update(resp, ex)
                     apiClient.setBearerToken(state.accessToken.orEmpty())
                     store.saveState(state.jsonSerializeString())
                     lastTokenUpdateTime = System.currentTimeMillis()
 
-                    if (notifyListener && (tokenNotExists || !state.accessToken.isNullOrEmpty())) {
+                    if (notifyListener && !state.accessToken.isNullOrEmpty()) {
                         sdkListener.onNewToken(state.accessToken.orEmpty())
                     }
                 }
