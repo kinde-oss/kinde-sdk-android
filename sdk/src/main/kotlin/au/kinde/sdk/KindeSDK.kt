@@ -79,23 +79,18 @@ class KindeSDK(
             val wasHandlingInvitation = invitationState.isHandling
             invitationState.completeHandling()
 
-            // Parse exception only if data is present
             if (data != null) {
                 val ex = AuthorizationException.fromIntent(data)
                 ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
-                // Clear runtime overrides on login cancel
                 clearRuntimeOverrides()
             }
 
-            // Always sync in-memory state with storage
             refreshState()
 
-            // Skip listener notifications during invitation cancellations
             if (wasHandlingInvitation) {
                 return@registerForActivityResult
             }
 
-            // Normal cancellation handling (non-invitation flows)
             if (isAuthenticated()) {
                 state.accessToken?.let { sdkListener.onNewToken(it) }
             } else {
@@ -107,24 +102,33 @@ class KindeSDK(
             val resp = AuthorizationResponse.fromIntent(data)
             val ex = AuthorizationException.fromIntent(data)
             synchronized(stateLock) {
+                if (isLoggingOut) return@registerForActivityResult
                 state.update(resp, ex)
                 store.saveState(state.jsonSerializeString())
             }
             resp?.let {
                 thread {
-                    getToken(resp.createTokenExchangeRequest())
+                    synchronized(stateLock) {
+                        if (isLoggingOut) return@thread
+                        activeBackgroundOperations++
+                    }
+                    try {
+                        getToken(resp.createTokenExchangeRequest())
+                    } finally {
+                        synchronized(stateLock) {
+                            activeBackgroundOperations--
+                            stateLock.notifyAll()
+                        }
+                    }
                 }
             }
             ex?.let {
                 sdkListener.onException(AuthException("${ex.error} ${ex.errorDescription}"))
-                // Reset invitation handling flag on auth error
                 invitationState.completeHandling()
-                // Check if the session is still valid after the error
                 refreshState()
                 if (!isAuthenticated()) {
                     sdkListener.onLogout()
                 }
-                // Clear runtime overrides on login error
                 clearRuntimeOverrides()
             }
         }
@@ -134,19 +138,36 @@ class KindeSDK(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val data = result.data
+
+        if (result.resultCode == ComponentActivity.RESULT_CANCELED) {
+            synchronized(stateLock) {
+                isLoggingOut = false
+            }
+            data?.let {
+                val ex = AuthorizationException.fromIntent(it)
+                ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+            }
+            return@registerForActivityResult
+        }
+
         if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
-            val resp = EndSessionResponse.fromIntent(data)
             val ex = AuthorizationException.fromIntent(data)
             apiClient.setBearerToken("")
 
-            // Clear runtime domain state before resetting to default domain
             store.clearState()
-            // Clear runtime overrides after clearing runtime state
             clearRuntimeOverrides()
+
+            synchronized(stateLock) {
+                isLoggingOut = false
+            }
 
             sdkListener.onLogout()
 
             ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
+        } else {
+            synchronized(stateLock) {
+                isLoggingOut = false
+            }
         }
     }
 
@@ -370,81 +391,6 @@ class KindeSDK(
                 state = AuthState(defaultConfig)
             }
             createServices()
-        }
-    }
-
-    private val launcher = activity.registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val data = result.data
-
-        if (result.resultCode == ComponentActivity.RESULT_CANCELED && data != null) {
-            val ex = AuthorizationException.fromIntent(data)
-            ex?.let { sdkListener.onException(AuthException("${ex.errorDescription}")) }
-        }
-
-        if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
-            val resp = AuthorizationResponse.fromIntent(data)
-            val ex = AuthorizationException.fromIntent(data)
-            synchronized(stateLock) {
-                if (isLoggingOut) return@registerForActivityResult
-                state.update(resp, ex)
-                store.saveState(state.jsonSerializeString())
-            }
-            resp?.let {
-                thread {
-                    synchronized(stateLock) {
-                        if (isLoggingOut) return@thread
-                        activeBackgroundOperations++
-                    }
-                    try {
-                        getToken(resp.createTokenExchangeRequest())
-                    } finally {
-                        synchronized(stateLock) {
-                            activeBackgroundOperations--
-                            stateLock.notifyAll()
-                        }
-                    }
-                }
-            }
-            ex?.let { sdkListener.onException(AuthException("${ex.error} ${ex.errorDescription}")) }
-        }
-    }
-
-    private val endTokenLauncher = activity.registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val data = result.data
-
-        // Handle cancellation/failure - must reset isLoggingOut
-        if (result.resultCode == ComponentActivity.RESULT_CANCELED) {
-            synchronized(stateLock) {
-                isLoggingOut = false
-            }
-            data?.let {
-                val ex = AuthorizationException.fromIntent(it)
-                ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
-            }
-            return@registerForActivityResult
-        }
-
-        if (result.resultCode == ComponentActivity.RESULT_OK) {
-            synchronized(stateLock) {
-                apiClient.setBearerToken("")
-                store.clearState()
-                state = AuthState(serviceConfiguration)
-                isLoggingOut = false
-            }
-            sdkListener.onLogout()
-            data?.let {
-                val ex = AuthorizationException.fromIntent(it)
-                ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
-            }
-        } else {
-            // Handle any other unexpected result code
-            synchronized(stateLock) {
-                isLoggingOut = false
-            }
         }
     }
 
@@ -856,7 +802,7 @@ class KindeSDK(
             val flag = flags[code]
             when {
                 flag == null -> defaultValue
-                flag.value is Boolean -> flag.value as Boolean
+                flag.value is Boolean -> flag.value
                 else -> {
                     android.util.Log.w("KindeSDK", "Flag '$code' type mismatch: expected Boolean, got ${flag.type}")
                     defaultValue
@@ -885,7 +831,7 @@ class KindeSDK(
             val flag = flags[code]
             when {
                 flag == null -> defaultValue
-                flag.value is String -> flag.value as String
+                flag.value is String -> flag.value
                 else -> {
                     android.util.Log.w("KindeSDK", "Flag '$code' type mismatch: expected String, got ${flag.type}")
                     defaultValue
@@ -914,7 +860,7 @@ class KindeSDK(
             val flag = flags[code]
             when {
                 flag == null -> defaultValue
-                flag.value is Number -> (flag.value as Number).toInt()
+                flag.value is Number -> flag.value.toInt()
                 else -> {
                     android.util.Log.w("KindeSDK", "Flag '$code' type mismatch: expected Integer, got ${flag.type}")
                     defaultValue
