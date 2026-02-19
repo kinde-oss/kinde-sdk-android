@@ -65,7 +65,7 @@ class KindeSDK(
 ) : TokenProvider, ClaimApi by ClaimDelegate, DefaultLifecycleObserver {
 
     private val gson = Gson()
-    private val serviceConfiguration: AuthorizationServiceConfiguration
+    private lateinit var serviceConfiguration: AuthorizationServiceConfiguration
     @Volatile
     private lateinit var state: AuthState
     private val authService = AuthorizationService(activity)
@@ -139,35 +139,33 @@ class KindeSDK(
     ) { result ->
         val data = result.data
 
-        if (result.resultCode == ComponentActivity.RESULT_CANCELED) {
-            synchronized(stateLock) {
-                isLoggingOut = false
+        when (result.resultCode) {
+            ComponentActivity.RESULT_CANCELED -> {
+                data?.let {
+                    val ex = AuthorizationException.fromIntent(it)
+                    ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+                }
             }
-            data?.let {
-                val ex = AuthorizationException.fromIntent(it)
-                ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+            ComponentActivity.RESULT_OK -> {
+                apiClient.setBearerToken("")
+                store.clearState()
+                clearRuntimeOverrides()
+
+                synchronized(stateLock) {
+                    state = AuthState(serviceConfiguration)
+                }
+
+                sdkListener.onLogout()
+
+                data?.let {
+                    val ex = AuthorizationException.fromIntent(it)
+                    ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
+                }
             }
-            return@registerForActivityResult
         }
 
-        if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
-            val ex = AuthorizationException.fromIntent(data)
-            apiClient.setBearerToken("")
-
-            store.clearState()
-            clearRuntimeOverrides()
-
-            synchronized(stateLock) {
-                isLoggingOut = false
-            }
-
-            sdkListener.onLogout()
-
-            ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
-        } else {
-            synchronized(stateLock) {
-                isLoggingOut = false
-            }
+        synchronized(stateLock) {
+            isLoggingOut = false
         }
     }
 
@@ -559,7 +557,7 @@ class KindeSDK(
                     Thread.currentThread().interrupt()
                     break
                 }
-                // Loop continues to recheck activeBackgroundOperations (handles spurious wakeups and notifyAll)
+                // Loop continues to recheck activeBackgroundOperations
             }
         }
 
@@ -578,14 +576,7 @@ class KindeSDK(
             .build()
         val endSessionIntent = authService.getEndSessionRequestIntent(endSessionRequest)
 
-        // Ensure launcher is called on main thread
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            endTokenLauncher.launch(endSessionIntent)
-        } else {
-            tokenRefreshHandler.post {
-                endTokenLauncher.launch(endSessionIntent)
-            }
-        }
+        endTokenLauncher.launch(endSessionIntent)
     }
 
     /**
@@ -1057,8 +1048,6 @@ class KindeSDK(
                 }
             }
 
-            // Always schedule the next refresh after successful token operation
-            scheduleTokenRefresh()
             if (grantType == "refresh_token") {
                 // Reset invitation handling flag after successful interactive authentication
                 invitationState.completeHandling()
@@ -1075,7 +1064,6 @@ class KindeSDK(
                 return false
             }
 
-            // Always schedule the next refresh after successful token operation
             scheduleTokenRefresh()
         } else {
             // Check if this is a 401/invalid_grant error (invalid refresh token)
