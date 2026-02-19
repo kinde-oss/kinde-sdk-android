@@ -43,7 +43,6 @@ import net.openid.appauth.AuthorizationService
 import net.openid.appauth.AuthorizationServiceConfiguration
 import net.openid.appauth.CodeVerifierUtil
 import net.openid.appauth.EndSessionRequest
-import net.openid.appauth.EndSessionResponse
 import net.openid.appauth.ResponseTypeValues
 import net.openid.appauth.TokenRequest
 import retrofit2.Call
@@ -66,11 +65,9 @@ class KindeSDK(
 ) : TokenProvider, ClaimApi by ClaimDelegate, DefaultLifecycleObserver {
 
     private val gson = Gson()
-
     private val serviceConfiguration: AuthorizationServiceConfiguration
-
+    @Volatile
     private lateinit var state: AuthState
-
     private val authService = AuthorizationService(activity)
 
     private val launcher = activity.registerForActivityResult(
@@ -82,21 +79,18 @@ class KindeSDK(
             val wasHandlingInvitation = invitationState.isHandling
             invitationState.completeHandling()
 
-            // Parse exception only if data is present
             if (data != null) {
                 val ex = AuthorizationException.fromIntent(data)
-                ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+                ex?.let { sdkListener.onException(AuthException(ex.errorDescription)) }
+                clearRuntimeOverrides()
             }
 
-            // Always sync in-memory state with storage
             refreshState()
 
-            // Skip listener notifications during invitation cancellations
             if (wasHandlingInvitation) {
                 return@registerForActivityResult
             }
 
-            // Normal cancellation handling (non-invitation flows)
             if (isAuthenticated()) {
                 state.accessToken?.let { sdkListener.onNewToken(it) }
             } else {
@@ -108,24 +102,33 @@ class KindeSDK(
             val resp = AuthorizationResponse.fromIntent(data)
             val ex = AuthorizationException.fromIntent(data)
             synchronized(stateLock) {
+                if (isLoggingOut) return@registerForActivityResult
                 state.update(resp, ex)
                 store.saveState(state.jsonSerializeString())
             }
             resp?.let {
                 thread {
-                    getToken(resp.createTokenExchangeRequest())
+                    synchronized(stateLock) {
+                        if (isLoggingOut) return@thread
+                        activeBackgroundOperations++
+                    }
+                    try {
+                        getToken(resp.createTokenExchangeRequest())
+                    } finally {
+                        synchronized(stateLock) {
+                            activeBackgroundOperations--
+                            stateLock.notifyAll()
+                        }
+                    }
                 }
             }
             ex?.let {
                 sdkListener.onException(AuthException("${ex.error} ${ex.errorDescription}"))
-                // Reset invitation handling flag on auth error
                 invitationState.completeHandling()
-                // Check if the session is still valid after the error
                 refreshState()
                 if (!isAuthenticated()) {
                     sdkListener.onLogout()
                 }
-                // Clear runtime overrides on login error
                 clearRuntimeOverrides()
             }
         }
@@ -135,111 +138,58 @@ class KindeSDK(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val data = result.data
-        if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
-            val resp = EndSessionResponse.fromIntent(data)
-            val ex = AuthorizationException.fromIntent(data)
-            apiClient.setBearerToken("")
 
-            // Clear runtime domain state before resetting to default domain
-            store.clearState()
-            // Clear runtime overrides after clearing runtime state
-            clearRuntimeOverrides()
+        when (result.resultCode) {
+            ComponentActivity.RESULT_CANCELED -> {
+                data?.let {
+                    val ex = AuthorizationException.fromIntent(it)
+                    ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+                }
 
-            sdkListener.onLogout()
+                synchronized(stateLock) {
+                    isLoggingOut = false
+                }
+                scheduleTokenRefresh()
+            }
+            ComponentActivity.RESULT_OK -> {
+                clearRuntimeOverrides()
 
-            ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
+                synchronized(stateLock) {
+                    apiClient.setBearerToken("")
+                    store.clearState()
+                    state = AuthState(getServiceConfiguration(configDomain))
+                    isLoggingOut = false
+                }
+
+                sdkListener.onLogout()
+
+                data?.let {
+                    val ex = AuthorizationException.fromIntent(it)
+                    ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
+                }
+            }
+            else -> {
+                data?.let {
+                    val ex = AuthorizationException.fromIntent(it)
+                    ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+                }
+
+                synchronized(stateLock) {
+                    isLoggingOut = false
+                }
+                scheduleTokenRefresh()
+            }
         }
     }
 
     private val configDomain: String
     private val configClientId: String
     private val audience: String?
-
     // Runtime overrides for domain and clientId (cleared on logout)
     @Volatile
     private var runtimeDomain: String? = null
-
     @Volatile
     private var runtimeClientId: String? = null
-
-    /**
-     * Validates a domain string to ensure it's a valid hostname
-     * without scheme, path, whitespace, or special characters.
-     *
-     * Enforces RFC 1035 constraints:
-     * - Total length ≤ 255 characters
-     * - Each label (part between dots) ≤ 63 characters
-     * - Labels must start/end with alphanumeric, hyphens only in middle
-     *
-     * @param domain The domain to validate
-     * @return true if valid, false otherwise
-     */
-    private fun isValidDomain(domain: String): Boolean {
-        if (domain.isBlank()) return false
-
-        // Check for invalid characters and patterns
-        if (domain.contains("://") ||  // no scheme
-            domain.contains("/") ||    // no path
-            domain.contains("@") ||     // no credentials
-            domain.contains(" ") ||     // no whitespace
-            domain.contains("\t") ||    // no tabs
-            domain.contains("\n") ||    // no newlines
-            domain.contains("\r")
-        ) {    // no carriage returns
-            return false
-        }
-
-        // RFC 1035 compliant hostname validation with length constraints
-        // - Max 255 chars total
-        // - Each label max 63 chars
-        // - Labels start/end with alphanumeric, hyphens only in middle
-        val hostnameRegex =
-            "^(?!.{256,})[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$".toRegex()
-        return hostnameRegex.matches(domain)
-    }
-
-    /**
-     * Validates a client ID string to ensure it's non-blank
-     * and contains no whitespace or control characters.
-     *
-     * @param clientId The client ID to validate
-     * @return true if valid, false otherwise
-     */
-    private fun isValidClientId(clientId: String): Boolean {
-        if (clientId.isBlank()) return false
-
-        // Check for whitespace and control characters
-        if (clientId.contains(" ") ||     // no spaces
-            clientId.contains("\t") ||    // no tabs
-            clientId.contains("\n") ||    // no newlines
-            clientId.contains("\r")
-        ) {    // no carriage returns
-            return false
-        }
-
-        return true
-    }
-
-    /**
-     * Clears runtime overrides and resets to default configuration if needed
-     */
-    private fun clearRuntimeOverrides() {
-        val hadRuntimeDomain = runtimeDomain != null
-        runtimeDomain = null
-        runtimeClientId = null
-
-        if (hadRuntimeDomain) {
-            // Reset API client to default domain
-            apiClient.setBaseUrl(HTTPS.format(configDomain))
-            store = Store(activity, configDomain)
-            synchronized(stateLock) {
-                val defaultConfig = getServiceConfiguration(configDomain)
-                state = AuthState(defaultConfig)
-            }
-            createServices()
-        }
-    }
-
     private var store: Store
     private lateinit var tokenRepository: TokenRepository
     private val apiClient: ApiClient
@@ -249,19 +199,20 @@ class KindeSDK(
     private lateinit var permissionsApi: PermissionsApi
     private lateinit var rolesApi: RolesApi
     private lateinit var featureFlagsApi: FeatureFlagsApi
-
     private val tokenRefreshHandler = Handler(Looper.getMainLooper())
     private var tokenRefreshRunnable: Runnable? = null
-
     @Volatile
     private var isPaused = false
     private var lastTokenUpdateTime = 0L
-    private val refreshLock = Object()
     private val stateLock = Object()
+    private val refreshLock = Object()
     private val domainSwitchLock = Object()
-
     @Volatile
     private var isRefreshing = false
+    @Volatile
+    private var isLoggingOut = false
+    @Volatile
+    private var activeBackgroundOperations = 0
 
     // Centralized invitation state management
     private val invitationState = InvitationState()
@@ -376,10 +327,79 @@ class KindeSDK(
         ClaimDelegate.tokenProvider = this
     }
 
-    override fun getToken(tokenType: TokenType): String? =
-        if (tokenType == TokenType.ACCESS_TOKEN) state.accessToken else state.idToken
+    /**
+     * Validates a domain string to ensure it's a valid hostname
+     * without scheme, path, whitespace, or special characters.
+     *
+     * Enforces RFC 1035 constraints:
+     * - Total length ≤ 255 characters
+     * - Each label (part between dots) ≤ 63 characters
+     * - Labels must start/end with alphanumeric, hyphens only in middle
+     *
+     * @param domain The domain to validate
+     * @return true if valid, false otherwise
+     */
+    private fun isValidDomain(domain: String): Boolean {
+        if (domain.isBlank()) return false
 
-    fun getRefreshToken(): String? = state.refreshToken
+        // Check for invalid characters and patterns
+        if (domain.contains("://") ||  // no scheme
+            domain.contains("/") ||    // no path
+            domain.contains("@") ||     // no credentials
+            domain.contains(" ") ||     // no whitespace
+            domain.contains("\t") ||    // no tabs
+            domain.contains("\n") ||    // no newlines
+            domain.contains("\r")
+        ) {    // no carriage returns
+            return false
+        }
+
+        // RFC 1035 compliant hostname validation with length constraints
+        // - Max 255 chars total
+        // - Each label max 63 chars
+        // - Labels start/end with alphanumeric, hyphens only in middle
+        val hostnameRegex =
+            "^(?!.{256,})[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$".toRegex()
+        return hostnameRegex.matches(domain)
+    }
+
+    /**
+     * Validates a client ID string to ensure it's non-blank
+     * and contains no whitespace or control characters.
+     *
+     * @param clientId The client ID to validate
+     * @return true if valid, false otherwise
+     */
+    private fun isValidClientId(clientId: String): Boolean {
+        if (clientId.isBlank()) return false
+        return clientId.none { it.isWhitespace() || it.isISOControl() }
+    }
+
+    /**
+     * Clears runtime overrides and resets to default configuration if needed
+     */
+    private fun clearRuntimeOverrides() {
+        val hadRuntimeDomain = runtimeDomain != null
+        runtimeDomain = null
+        runtimeClientId = null
+
+        if (hadRuntimeDomain) {
+            // Reset API client to default domain
+            apiClient.setBaseUrl(HTTPS.format(configDomain))
+            store = Store(activity, configDomain)
+            synchronized(stateLock) {
+                val defaultConfig = getServiceConfiguration(configDomain)
+                state = AuthState(defaultConfig)
+            }
+            createServices()
+        }
+    }
+
+    override fun getToken(tokenType: TokenType): String? = synchronized(stateLock) {
+        if (tokenType == TokenType.ACCESS_TOKEN) state.accessToken else state.idToken
+    }
+
+    fun getRefreshToken(): String? = synchronized(stateLock) { state.refreshToken }
 
     /**
      * Initiate login flow
@@ -522,11 +542,15 @@ class KindeSDK(
     }
 
     fun logout() {
+        synchronized(stateLock) {
+            if (isLoggingOut) return
+            isLoggingOut = true
+        }
+
         clearCache()
         invitationState.reset()
         cancelTokenRefresh()
 
-        // Use the effective domain for logout
         val effectiveDomain = runtimeDomain ?: configDomain
         val logoutServiceConfig = getServiceConfiguration(effectiveDomain)
 
@@ -536,10 +560,28 @@ class KindeSDK(
             .setState(null)
             .build()
         val endSessionIntent = authService.getEndSessionRequestIntent(endSessionRequest)
-        endTokenLauncher.launch(endSessionIntent)
 
-        // Note: Runtime overrides are cleared in endTokenLauncher callback
-        // only after successful logout to avoid inconsistent state if cancelled
+        thread {
+            synchronized(stateLock) {
+                val deadline = System.currentTimeMillis() + 5000
+                while (activeBackgroundOperations > 0) {
+                    val remainingMillis = deadline - System.currentTimeMillis()
+                    if (remainingMillis <= 0) {
+                        android.util.Log.w("KindeSDK", "Logout timeout waiting for $activeBackgroundOperations background operations")
+                        break
+                    }
+                    try {
+                        stateLock.wait(remainingMillis)
+                    } catch (ie: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        break
+                    }
+                }
+            }
+            tokenRefreshHandler.post {
+                endTokenLauncher.launch(endSessionIntent)
+            }
+        }
     }
 
     /**
@@ -611,7 +653,7 @@ class KindeSDK(
 
     /**
      * Get all permissions for the authenticated user
-     * 
+     *
      * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API.
      *                Set useCache = false to bypass cache and force a fresh API call.
      * @return ClaimData.Permissions containing org code and list of permission keys
@@ -652,11 +694,11 @@ class KindeSDK(
 
     /**
      * Check if user has a specific permission
-     * 
+     *
      * Note: When using forceApi=true, this fetches ALL permissions from the API, but results are
      * cached for 60 seconds by default. Subsequent calls within the cache window will use cached data.
      * To force a fresh API call, use ApiOptions(forceApi = true, useCache = false).
-     * 
+     *
      * @param permission The permission key to check
      * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
      * @return ClaimData.Permission with orgCode and isGranted status
@@ -675,7 +717,7 @@ class KindeSDK(
 
     /**
      * Get all roles for the authenticated user
-     * 
+     *
      * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API.
      *                Set useCache = false to bypass cache and force a fresh API call.
      * @return ClaimData.Roles containing org code and list of role keys
@@ -716,11 +758,11 @@ class KindeSDK(
 
     /**
      * Check if user has a specific role
-     * 
+     *
      * Note: When using forceApi=true, this fetches ALL roles from the API, but results are
      * cached for 60 seconds by default. Subsequent calls within the cache window will use cached data.
      * To force a fresh API call, use ApiOptions(forceApi = true, useCache = false).
-     * 
+     *
      * @param role The role key to check
      * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
      * @return ClaimData.Role with orgCode and isGranted status
@@ -739,11 +781,11 @@ class KindeSDK(
 
     /**
      * Get a boolean feature flag value
-     * 
+     *
      * Note: When using forceApi=true, this fetches ALL feature flags from the API, but results are
      * cached for 60 seconds by default. Subsequent calls within the cache window will use cached data.
      * To force a fresh API call, use ApiOptions(forceApi = true, useCache = false).
-     * 
+     *
      * @param code The flag code/key
      * @param defaultValue Default value if flag doesn't exist
      * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
@@ -756,7 +798,7 @@ class KindeSDK(
             val flag = flags[code]
             when {
                 flag == null -> defaultValue
-                flag.value is Boolean -> flag.value as Boolean
+                flag.value is Boolean -> flag.value
                 else -> {
                     android.util.Log.w("KindeSDK", "Flag '$code' type mismatch: expected Boolean, got ${flag.type}")
                     defaultValue
@@ -769,11 +811,11 @@ class KindeSDK(
 
     /**
      * Get a string feature flag value
-     * 
+     *
      * Note: When using forceApi=true, this fetches ALL feature flags from the API, but results are
      * cached for 60 seconds by default. Subsequent calls within the cache window will use cached data.
      * To force a fresh API call, use ApiOptions(forceApi = true, useCache = false).
-     * 
+     *
      * @param code The flag code/key
      * @param defaultValue Default value if flag doesn't exist
      * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
@@ -785,7 +827,7 @@ class KindeSDK(
             val flag = flags[code]
             when {
                 flag == null -> defaultValue
-                flag.value is String -> flag.value as String
+                flag.value is String -> flag.value
                 else -> {
                     android.util.Log.w("KindeSDK", "Flag '$code' type mismatch: expected String, got ${flag.type}")
                     defaultValue
@@ -798,11 +840,11 @@ class KindeSDK(
 
     /**
      * Get an integer feature flag value
-     * 
+     *
      * Note: When using forceApi=true, this fetches ALL feature flags from the API, but results are
      * cached for 60 seconds by default. Subsequent calls within the cache window will use cached data.
      * To force a fresh API call, use ApiOptions(forceApi = true, useCache = false).
-     * 
+     *
      * @param code The flag code/key
      * @param defaultValue Default value if flag doesn't exist
      * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API
@@ -814,7 +856,7 @@ class KindeSDK(
             val flag = flags[code]
             when {
                 flag == null -> defaultValue
-                flag.value is Number -> (flag.value as Number).toInt()
+                flag.value is Number -> flag.value.toInt()
                 else -> {
                     android.util.Log.w("KindeSDK", "Flag '$code' type mismatch: expected Integer, got ${flag.type}")
                     defaultValue
@@ -827,7 +869,7 @@ class KindeSDK(
 
     /**
      * Get all feature flags for the authenticated user
-     * 
+     *
      * @param options Optional API options. Use ApiOptions(forceApi = true) to fetch fresh data from API.
      *                Set useCache = false to bypass cache and force a fresh API call.
      * @return Map of flag codes to Flag objects
@@ -950,6 +992,11 @@ class KindeSDK(
     }
 
     private fun getToken(tokenRequest: TokenRequest, notifyListener: Boolean = true): Boolean {
+        // Check if logout is in progress
+        synchronized(stateLock) {
+            if (isLoggingOut) return false
+        }
+
         val grantType = tokenRequest.grantType
 
         // For refresh token requests, use synchronized block to prevent concurrent refreshes
@@ -963,6 +1010,10 @@ class KindeSDK(
                         return false
                     }
                 }
+                // Double-check logout flag after waiting
+                synchronized(stateLock) {
+                    if (isLoggingOut) return false
+                }
                 isRefreshing = true
             }
         }
@@ -973,33 +1024,48 @@ class KindeSDK(
         )
 
         if (resp != null) {
-            val tokenNotExists = state.accessToken.isNullOrEmpty()
+            // Check logout flag first, then clear isRefreshing if needed (avoid nested locks)
+            val wasLoggingOut = synchronized(stateLock) { isLoggingOut }
+            if (wasLoggingOut) {
+                if (grantType == "refresh_token") {
+                    synchronized(refreshLock) {
+                        isRefreshing = false
+                        refreshLock.notifyAll()
+                    }
+                }
+                return false
+            }
+
             synchronized(stateLock) {
-                state.update(resp, ex)
-                store.saveState(state.jsonSerializeString())
-            }
-            apiClient.setBearerToken(state.accessToken.orEmpty())
-            lastTokenUpdateTime = System.currentTimeMillis()
+                if (!isLoggingOut) {
+                    state.update(resp, ex)
+                    apiClient.setBearerToken(state.accessToken.orEmpty())
+                    store.saveState(state.jsonSerializeString())
+                    lastTokenUpdateTime = System.currentTimeMillis()
 
-            if (notifyListener && (tokenNotExists || !state.accessToken.isNullOrEmpty())) {
-                sdkListener.onNewToken(state.accessToken.orEmpty())
-            }
-
-            // Reset invitation handling flag after successful interactive authentication
-            if (grantType != "refresh_token") {
-                invitationState.completeHandling()
+                    if (notifyListener && !state.accessToken.isNullOrEmpty()) {
+                        sdkListener.onNewToken(state.accessToken.orEmpty())
+                    }
+                }
             }
 
-            // Always schedule the next refresh after successful token operation
-            scheduleTokenRefresh()
             if (grantType == "refresh_token") {
+                // Reset invitation handling flag after successful interactive authentication
+                invitationState.completeHandling()
                 synchronized(refreshLock) {
+                    // Clear isRefreshing outside of stateLock to avoid nested lock
                     isRefreshing = false
                     refreshLock.notifyAll()
                 }
-            } else {
-                isRefreshing = false
             }
+
+            // Check if logout happened during state update
+            val logoutHappened = synchronized(stateLock) { isLoggingOut }
+            if (logoutHappened) {
+                return false
+            }
+
+            scheduleTokenRefresh()
         } else {
             // Check if this is a 401/invalid_grant error (invalid refresh token)
             val isInvalidRefreshToken = ex?.let { exception ->
@@ -1014,11 +1080,7 @@ class KindeSDK(
             // For other errors, only logout if notifyListener is true (manual refresh)
             try {
                 if (isInvalidRefreshToken || notifyListener) {
-                    if (Looper.myLooper() == Looper.getMainLooper()) {
-                        logout()
-                    } else {
-                        tokenRefreshHandler.post { logout() }
-                    }
+                    logout()
                 }
             } finally {
                 if (grantType == "refresh_token") {
@@ -1026,8 +1088,6 @@ class KindeSDK(
                         isRefreshing = false
                         refreshLock.notifyAll()
                     }
-                } else {
-                    isRefreshing = false
                 }
             }
         }
@@ -1132,9 +1192,20 @@ class KindeSDK(
     private fun createTokenRefreshRunnable(retryDelayMs: Long = 10_000L): Runnable {
         return Runnable {
             thread {
-                val success = getToken(state.createTokenRefreshRequest(), notifyListener = false)
-                if (!success) {
-                    postTokenRefresh(retryDelayMs, retryDelayMs)
+                synchronized(stateLock) {
+                    if (isLoggingOut) return@thread
+                    activeBackgroundOperations++
+                }
+                try {
+                    val success = getToken(state.createTokenRefreshRequest(), notifyListener = false)
+                    if (!success && !isLoggingOut) {
+                        postTokenRefresh(retryDelayMs, retryDelayMs)
+                    }
+                } finally {
+                    synchronized(stateLock) {
+                        activeBackgroundOperations--
+                        stateLock.notifyAll()
+                    }
                 }
             }
         }
@@ -1319,7 +1390,6 @@ class KindeSDK(
 
         private const val HTTPS = "https://%s/"
         private const val BEARER_AUTH = "kindeBearerAuth"
-        private const val LOGIN_HINT = "jdoe@user.example.com"
         private val DEFAULT_SCOPES = listOf("openid", "offline", "email", "profile")
 
         // Cache configuration
