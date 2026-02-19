@@ -539,33 +539,13 @@ class KindeSDK(
 
     fun logout() {
         synchronized(stateLock) {
-            // Set logout flag to prevent new background operations
             isLoggingOut = true
-
-            // Wait for all active background operations to complete with proper timeout handling
-            val deadline = System.currentTimeMillis() + 5000 // 5 second timeout
-            while (activeBackgroundOperations > 0) {
-                val remainingMillis = deadline - System.currentTimeMillis()
-                if (remainingMillis <= 0) {
-                    // Timeout - log warning but proceed
-                    android.util.Log.w("KindeSDK", "Logout timeout waiting for $activeBackgroundOperations background operations")
-                    break
-                }
-                try {
-                    stateLock.wait(remainingMillis)
-                } catch (ie: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    break
-                }
-                // Loop continues to recheck activeBackgroundOperations
-            }
         }
 
         clearCache()
         invitationState.reset()
         cancelTokenRefresh()
 
-        // Use the effective domain for logout
         val effectiveDomain = runtimeDomain ?: configDomain
         val logoutServiceConfig = getServiceConfiguration(effectiveDomain)
 
@@ -576,7 +556,27 @@ class KindeSDK(
             .build()
         val endSessionIntent = authService.getEndSessionRequestIntent(endSessionRequest)
 
-        endTokenLauncher.launch(endSessionIntent)
+        thread {
+            synchronized(stateLock) {
+                val deadline = System.currentTimeMillis() + 5000
+                while (activeBackgroundOperations > 0) {
+                    val remainingMillis = deadline - System.currentTimeMillis()
+                    if (remainingMillis <= 0) {
+                        android.util.Log.w("KindeSDK", "Logout timeout waiting for $activeBackgroundOperations background operations")
+                        break
+                    }
+                    try {
+                        stateLock.wait(remainingMillis)
+                    } catch (ie: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        break
+                    }
+                }
+            }
+            tokenRefreshHandler.post {
+                endTokenLauncher.launch(endSessionIntent)
+            }
+        }
     }
 
     /**
@@ -1079,11 +1079,7 @@ class KindeSDK(
             // For other errors, only logout if notifyListener is true (manual refresh)
             try {
                 if (isInvalidRefreshToken || notifyListener) {
-                    if (Looper.myLooper() == Looper.getMainLooper()) {
-                        logout()
-                    } else {
-                        tokenRefreshHandler.post { logout() }
-                    }
+                    logout()
                 }
             } finally {
                 if (grantType == "refresh_token") {
