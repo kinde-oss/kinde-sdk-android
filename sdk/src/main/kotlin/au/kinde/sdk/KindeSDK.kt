@@ -152,11 +152,11 @@ class KindeSDK(
                 scheduleTokenRefresh()
             }
             ComponentActivity.RESULT_OK -> {
-                apiClient.setBearerToken("")
-                store.clearState()
                 clearRuntimeOverrides()
 
                 synchronized(stateLock) {
+                    apiClient.setBearerToken("")
+                    store.clearState()
                     state = AuthState(getServiceConfiguration(configDomain))
                     isLoggingOut = false
                 }
@@ -167,6 +167,17 @@ class KindeSDK(
                     val ex = AuthorizationException.fromIntent(it)
                     ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
                 }
+            }
+            else -> {
+                data?.let {
+                    val ex = AuthorizationException.fromIntent(it)
+                    ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+                }
+
+                synchronized(stateLock) {
+                    isLoggingOut = false
+                }
+                scheduleTokenRefresh()
             }
         }
     }
@@ -384,10 +395,11 @@ class KindeSDK(
         }
     }
 
-    override fun getToken(tokenType: TokenType): String? =
+    override fun getToken(tokenType: TokenType): String? = synchronized(stateLock) {
         if (tokenType == TokenType.ACCESS_TOKEN) state.accessToken else state.idToken
+    }
 
-    fun getRefreshToken(): String? = state.refreshToken
+    fun getRefreshToken(): String? = synchronized(stateLock) { state.refreshToken }
 
     /**
      * Initiate login flow
@@ -531,6 +543,7 @@ class KindeSDK(
 
     fun logout() {
         synchronized(stateLock) {
+            if (isLoggingOut) return
             isLoggingOut = true
         }
 
@@ -1024,10 +1037,7 @@ class KindeSDK(
             }
 
             synchronized(stateLock) {
-                // Double-check logout flag
-                if (isLoggingOut) {
-                    // Will clear isRefreshing after releasing stateLock
-                } else {
+                if (!isLoggingOut) {
                     state.update(resp, ex)
                     apiClient.setBearerToken(state.accessToken.orEmpty())
                     store.saveState(state.jsonSerializeString())
