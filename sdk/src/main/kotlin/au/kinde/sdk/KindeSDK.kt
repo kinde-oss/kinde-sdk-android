@@ -1380,7 +1380,6 @@ class KindeSDK(
 
         private const val HTTPS = "https://%s/"
         private const val BEARER_AUTH = "kindeBearerAuth"
-        private const val LOGIN_HINT = "jdoe@user.example.com"
         private val DEFAULT_SCOPES = listOf("openid", "offline", "email", "profile")
 
         // Cache configuration
