@@ -1,6 +1,6 @@
 package au.kinde.sdk.token
 
-import au.kinde.sdk.callApi
+import au.kinde.sdk.utils.callApi
 import net.openid.appauth.AuthState
 import net.openid.appauth.AuthorizationException
 import net.openid.appauth.AuthorizationException.AuthorizationRequestErrors.SERVER_ERROR
@@ -48,7 +48,7 @@ class TokenRepository(private val tokenApi: TokenApi, private val version: Strin
                 AuthorizationException.fromOAuthTemplate(
                     TokenRequestErrors.byString(error),
                     error,
-                    json.optString(AuthorizationException.PARAM_ERROR_DESCRIPTION, null),
+                    json.optString(AuthorizationException.PARAM_ERROR_DESCRIPTION),
                     UriUtil.parseUriIfAvailable(
                         json.optString(AuthorizationException.PARAM_ERROR_URI)
                     )

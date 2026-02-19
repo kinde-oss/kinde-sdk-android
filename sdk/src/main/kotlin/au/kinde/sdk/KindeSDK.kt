@@ -16,6 +16,8 @@ import au.kinde.sdk.api.OAuthApi
 import au.kinde.sdk.api.PermissionsApi
 import au.kinde.sdk.api.RolesApi
 import au.kinde.sdk.api.UsersApi
+import au.kinde.sdk.api.model.entitlements.EntitlementResponse
+import au.kinde.sdk.api.model.entitlements.EntitlementsResponse
 import au.kinde.sdk.api.model.CreateUser200Response
 import au.kinde.sdk.api.model.CreateUserRequest
 import au.kinde.sdk.api.model.User
@@ -31,6 +33,7 @@ import au.kinde.sdk.token.TokenRepository
 import au.kinde.sdk.utils.ClaimApi
 import au.kinde.sdk.utils.ClaimDelegate
 import au.kinde.sdk.utils.TokenProvider
+import au.kinde.sdk.utils.callApi
 import com.google.gson.Gson
 import net.openid.appauth.AuthState
 import net.openid.appauth.AuthorizationException
@@ -66,6 +69,87 @@ class KindeSDK(
     @Volatile
     private lateinit var state: AuthState
     private val authService = AuthorizationService(activity)
+
+    private val launcher = activity.registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val data = result.data
+
+        if (result.resultCode == ComponentActivity.RESULT_CANCELED) {
+            val wasHandlingInvitation = invitationState.isHandling
+            invitationState.completeHandling()
+
+            // Parse exception only if data is present
+            if (data != null) {
+                val ex = AuthorizationException.fromIntent(data)
+                ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+                // Clear runtime overrides on login cancel
+                clearRuntimeOverrides()
+            }
+
+            // Always sync in-memory state with storage
+            refreshState()
+
+            // Skip listener notifications during invitation cancellations
+            if (wasHandlingInvitation) {
+                return@registerForActivityResult
+            }
+
+            // Normal cancellation handling (non-invitation flows)
+            if (isAuthenticated()) {
+                state.accessToken?.let { sdkListener.onNewToken(it) }
+            } else {
+                sdkListener.onLogout()
+            }
+        }
+
+        if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
+            val resp = AuthorizationResponse.fromIntent(data)
+            val ex = AuthorizationException.fromIntent(data)
+            synchronized(stateLock) {
+                state.update(resp, ex)
+                store.saveState(state.jsonSerializeString())
+            }
+            resp?.let {
+                thread {
+                    getToken(resp.createTokenExchangeRequest())
+                }
+            }
+            ex?.let {
+                sdkListener.onException(AuthException("${ex.error} ${ex.errorDescription}"))
+                // Reset invitation handling flag on auth error
+                invitationState.completeHandling()
+                // Check if the session is still valid after the error
+                refreshState()
+                if (!isAuthenticated()) {
+                    sdkListener.onLogout()
+                }
+                // Clear runtime overrides on login error
+                clearRuntimeOverrides()
+            }
+        }
+    }
+
+    private val endTokenLauncher = activity.registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val data = result.data
+        if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
+            val resp = EndSessionResponse.fromIntent(data)
+            val ex = AuthorizationException.fromIntent(data)
+            apiClient.setBearerToken("")
+
+            // Clear runtime domain state before resetting to default domain
+            store.clearState()
+            // Clear runtime overrides after clearing runtime state
+            clearRuntimeOverrides()
+
+            sdkListener.onLogout()
+
+            ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
+        }
+    }
+
     private val configDomain: String
     private val configClientId: String
     private val audience: String?
@@ -97,6 +181,9 @@ class KindeSDK(
     private var isLoggingOut = false
     @Volatile
     private var activeBackgroundOperations = 0
+
+    // Centralized invitation state management
+    private val invitationState = InvitationState()
 
     // Cache infrastructure for API responses
     private data class CacheEntry<T>(
@@ -159,6 +246,52 @@ class KindeSDK(
         createServices()
 
         initializeStoreData()
+
+        if (store.getKeys().isNullOrEmpty()) {
+            keysApi.getKeys().enqueue(object : Callback<Keys> {
+                override fun onResponse(call: Call<Keys>, response: Response<Keys>) {
+                    response.body()?.let { keys ->
+                        store.saveKeys(gson.toJson(keys))
+                    }
+                }
+
+                override fun onFailure(call: Call<Keys>, t: Throwable) {
+                    sdkListener.onException(Exception(t))
+                }
+            })
+        }
+
+        // Check for invitation_code in the launching intent
+        val invitationCode = activity.intent?.data?.getQueryParameter(INVITATION_CODE_PARAM_NAME)
+        if (!invitationCode.isNullOrEmpty() && !invitationState.isProcessed(invitationCode)) {
+            // Check if already resumed; if so, handle immediately, otherwise use observer
+            if (activity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                handleInvitation(invitationCode)
+            } else {
+                // Use lifecycle observer to handle invitation after activity is resumed
+                activity.lifecycle.addObserver(object : DefaultLifecycleObserver {
+                    override fun onResume(owner: LifecycleOwner) {
+                        owner.lifecycle.removeObserver(this)
+                        handleInvitation(invitationCode)
+                    }
+                })
+            }
+        }
+
+        // Skip normal auth callbacks if handling invitation
+        if (!invitationState.isHandling) {
+            if (!stateJson.isNullOrEmpty()) {
+                if (isAuthenticated()) {
+                    state.accessToken?.let { accessToken ->
+                        apiClient.setBearerToken(accessToken)
+                        sdkListener.onNewToken(accessToken)
+                        scheduleTokenRefresh()
+                    }
+                }
+            } else {
+                sdkListener.onLogout()
+            }
+        }
         ClaimDelegate.tokenProvider = this
     }
 
@@ -337,9 +470,15 @@ class KindeSDK(
         loginHint: String? = null,
         domain: String? = null,
         clientId: String? = null,
+        invitationCode: String? = null,
         connectionId: String? = null
     ) {
-        login(type, orgCode, loginHint, mapOf(), domain, clientId, connectionId)
+        if (!invitationCode.isNullOrBlank()) {
+            handleInvitation(invitationCode, type, orgCode)
+        } else {
+            val params = mutableMapOf<String, String>()
+            login(type, orgCode, loginHint, params, domain, clientId, connectionId)
+        }
     }
 
     /**
@@ -363,6 +502,7 @@ class KindeSDK(
         planInterest: String? = null,
         domain: String? = null,
         clientId: String? = null,
+        invitationCode: String? = null,
         connectionId: String? = null
     ) {
         val params = mutableMapOf<String, String>(
@@ -374,7 +514,11 @@ class KindeSDK(
         if (!planInterest.isNullOrBlank()) {
             params[PLAN_INTEREST_PARAM_NAME] = planInterest
         }
-        login(type, orgCode, loginHint, params, domain, clientId, connectionId)
+        if (!invitationCode.isNullOrBlank()) {
+            handleInvitation(invitationCode, type, orgCode)
+        } else {
+            login(type, orgCode, loginHint, params, domain, clientId, connectionId)
+        }
     }
 
     /**
@@ -421,6 +565,34 @@ class KindeSDK(
         )
     }
 
+    /**
+     * Handle an invitation code by redirecting to registration with the code.
+     * This is typically called when the app detects an invitation_code in the incoming intent/deep link.
+     *
+     * @param invitationCode The invitation code from the URL
+     * @param type Optional grant type (defaults to null)
+     * @param orgCode Optional organization code
+     */
+    fun handleInvitation(
+        invitationCode: String,
+        type: GrantType? = null,
+        orgCode: String? = null
+    ) {
+        if (invitationState.isProcessed(invitationCode)) {
+            // Already processed this invitation code
+            return
+        }
+
+        invitationState.startHandling(invitationCode)
+
+        val params = mutableMapOf(
+            REGISTRATION_PAGE_PARAM_NAME to REGISTRATION_PAGE_PARAM_VALUE,
+            INVITATION_CODE_PARAM_NAME to invitationCode,
+            IS_INVITATION_PARAM_NAME to "true"
+        )
+        login(type, orgCode, null, params)
+    }
+
     fun logout() {
         synchronized(stateLock) {
             // Set logout flag to prevent new background operations
@@ -446,6 +618,7 @@ class KindeSDK(
         }
 
         clearCache()
+        invitationState.reset()
         cancelTokenRefresh()
 
         // Use the effective domain for logout
@@ -509,9 +682,21 @@ class KindeSDK(
         flagsCache = null
     }
 
+    /**
+     * Check if the SDK is currently handling an invitation code.
+     * This can be used to show appropriate loading UI while the invitation flow is in progress.
+     *
+     * @return true if an invitation code was detected and is being processed
+     */
+    fun isHandlingInvitation() = invitationState.isHandling
+
     fun getUser(): UserProfile? = callApi(oAuthApi.getUser())
 
     fun getUserProfileV2(): UserProfileV2? = callApi(oAuthApi.getUserProfileV2())
+
+    fun getEntitlement(key: String): EntitlementResponse? = callApi(oAuthApi.getEntitlement(key))
+
+    fun getEntitlements(): EntitlementsResponse? = callApi(oAuthApi.getEntitlements())
 
     fun createUser(createUserRequest: CreateUserRequest? = null): CreateUser200Response? =
         callApi(usersApi.createUser(createUserRequest))
@@ -926,9 +1111,13 @@ class KindeSDK(
                 }
             }
 
-            // Clear isRefreshing outside of stateLock to avoid nested lock
+            // Always schedule the next refresh after successful token operation
+            scheduleTokenRefresh()
             if (grantType == "refresh_token") {
+                // Reset invitation handling flag after successful interactive authentication
+                invitationState.completeHandling()
                 synchronized(refreshLock) {
+                    // Clear isRefreshing outside of stateLock to avoid nested lock
                     isRefreshing = false
                     refreshLock.notifyAll()
                 }
@@ -1265,6 +1454,8 @@ class KindeSDK(
         private const val PLAN_INTEREST_PARAM_NAME = "plan_interest"
         private const val CONNECTION_ID_PARAM_NAME = "connection_id"
         private const val REDIRECT_PARAM_NAME = "redirect"
+        private const val INVITATION_CODE_PARAM_NAME = "invitation_code"
+        private const val IS_INVITATION_PARAM_NAME = "is_invitation"
 
         private const val HTTPS = "https://%s/"
         private const val BEARER_AUTH = "kindeBearerAuth"
