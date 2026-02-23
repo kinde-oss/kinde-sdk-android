@@ -1049,9 +1049,12 @@ class KindeSDK(
                 }
             }
 
-            if (grantType == "refresh_token") {
+            if (grantType != "refresh_token") {
                 // Reset invitation handling flag after successful interactive authentication
                 invitationState.completeHandling()
+            }
+
+            if (grantType == "refresh_token") {
                 synchronized(refreshLock) {
                     // Clear isRefreshing outside of stateLock to avoid nested lock
                     isRefreshing = false
