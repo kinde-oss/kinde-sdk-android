@@ -201,6 +201,7 @@ class KindeSDK(
     private lateinit var rolesApi: RolesApi
     private lateinit var featureFlagsApi: FeatureFlagsApi
     private val tokenRefreshHandler = Handler(Looper.getMainLooper())
+    @Volatile
     private var tokenRefreshRunnable: Runnable? = null
     @Volatile
     private var isPaused = false
@@ -1207,7 +1208,12 @@ class KindeSDK(
                     activeBackgroundOperations++
                 }
                 try {
-                    val success = getToken(state.createTokenRefreshRequest(), notifyListener = false)
+                    val tokenRequest = try {
+                        state.createTokenRefreshRequest()
+                    } catch (e: IllegalStateException) {
+                        return@thread
+                    }
+                    val success = getToken(tokenRequest, notifyListener = false)
                     if (!success && !isLoggingOut) {
                         postTokenRefresh(retryDelayMs, retryDelayMs)
                     }
