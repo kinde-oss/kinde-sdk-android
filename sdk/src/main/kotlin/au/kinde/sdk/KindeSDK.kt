@@ -81,7 +81,7 @@ class KindeSDK(
 
             if (data != null) {
                 val ex = AuthorizationException.fromIntent(data)
-                ex?.let { sdkListener.onException(AuthException(ex.errorDescription)) }
+                ex?.let { sdkListener.onException(AuthException("${ex.error} ${ex.errorDescription}")) }
                 clearRuntimeOverrides()
             }
 
@@ -143,7 +143,7 @@ class KindeSDK(
             ComponentActivity.RESULT_CANCELED -> {
                 data?.let {
                     val ex = AuthorizationException.fromIntent(it)
-                    ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+                    ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
                 }
 
                 synchronized(stateLock) {
@@ -152,11 +152,12 @@ class KindeSDK(
                 scheduleTokenRefresh()
             }
             ComponentActivity.RESULT_OK -> {
+                val storeToClean = store
                 clearRuntimeOverrides()
 
                 synchronized(stateLock) {
                     apiClient.setBearerToken("")
-                    store.clearState()
+                    storeToClean.clearState()
                     state = AuthState(getServiceConfiguration(configDomain))
                     isLoggingOut = false
                 }
@@ -171,7 +172,7 @@ class KindeSDK(
             else -> {
                 data?.let {
                     val ex = AuthorizationException.fromIntent(it)
-                    ex?.let { sdkListener.onException(LogoutException("${ex.errorDescription}")) }
+                    ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
                 }
 
                 synchronized(stateLock) {
@@ -1036,6 +1037,8 @@ class KindeSDK(
                 return false
             }
 
+            var shouldNotify = false
+            var snapshotToken = ""
             synchronized(stateLock) {
                 if (!isLoggingOut) {
                     state.update(resp, ex)
@@ -1044,9 +1047,13 @@ class KindeSDK(
                     lastTokenUpdateTime = System.currentTimeMillis()
 
                     if (notifyListener && !state.accessToken.isNullOrEmpty()) {
-                        sdkListener.onNewToken(state.accessToken.orEmpty())
+                        shouldNotify = true
+                        snapshotToken = state.accessToken.orEmpty()
                     }
                 }
+            }
+            if (shouldNotify) {
+                sdkListener.onNewToken(snapshotToken)
             }
 
             if (grantType != "refresh_token") {
