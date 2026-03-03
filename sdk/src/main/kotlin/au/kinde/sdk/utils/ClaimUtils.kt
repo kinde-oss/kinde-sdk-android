@@ -29,39 +29,34 @@ object ClaimDelegate : ClaimApi {
     override fun getPermissions(): ClaimData.Permissions {
         return ClaimData.Permissions(
             getClaimInternal(ORG_CODE_CLAIM, type = String::class).orEmpty(),
-            getClaimInternal(PERMISSIONS_CLAIM, type = List::class) as? List<String> ?: emptyList()
+            getStringListClaim(PERMISSIONS_CLAIM)
         )
     }
 
     override fun getPermission(permission: String): ClaimData.Permission {
         return ClaimData.Permission(
             getClaimInternal(ORG_CODE_CLAIM, type = String::class).orEmpty(),
-            (getClaimInternal(PERMISSIONS_CLAIM, type = List::class) as? List<String>
-                ?: emptyList())
-                .contains(permission)
+            getStringListClaim(PERMISSIONS_CLAIM).contains(permission)
         )
     }
 
     override fun getRoles(): ClaimData.Roles {
         return ClaimData.Roles(
             getClaimInternal(ORG_CODE_CLAIM, type = String::class).orEmpty(),
-            getClaimInternal(ROLES_CLAIM, type = List::class) as? List<String> ?: emptyList()
+            getStringListClaim(ROLES_CLAIM)
         )
     }
 
     override fun getRole(role: String): ClaimData.Role {
         return ClaimData.Role(
             getClaimInternal(ORG_CODE_CLAIM, type = String::class).orEmpty(),
-            (getClaimInternal(ROLES_CLAIM, type = List::class) as? List<String>
-                ?: emptyList())
-                .contains(role)
+            getStringListClaim(ROLES_CLAIM).contains(role)
         )
     }
 
     override fun getUserOrganizations(): ClaimData.Organizations {
         return ClaimData.Organizations(
-            getClaimInternal(ORG_CODES_CLAIM, TokenType.ID_TOKEN, List::class) as? List<String>
-                ?: emptyList()
+            getStringListClaim(ORG_CODES_CLAIM, TokenType.ID_TOKEN)
         )
     }
 
@@ -131,6 +126,16 @@ object ClaimDelegate : ClaimApi {
         return flagsMap
     }
 
+    private fun getStringListClaim(
+        claim: String,
+        tokenType: TokenType = TokenType.ACCESS_TOKEN
+    ): List<String> {
+        return getClaimInternal(claim, tokenType, List::class)
+            ?.filterIsInstance<String>()
+            ?: emptyList()
+    }
+
+    @Suppress("UNCHECKED_CAST")
     private fun <T : Any> getClaimInternal(
         claim: String,
         tokenType: TokenType = TokenType.ACCESS_TOKEN,
