@@ -10,6 +10,38 @@ You can also use the Android starter kit [here](https://github.com/kinde-starte
 
 For details on integrating this SDK into your project, head over to the [Kinde docs](https://kinde.com/docs/) and see the [Android SDK](https://kinde.com/docs/developer-tools/android-sdk/) doc 👍🏼.
 
+## Configuring the redirect scheme
+
+The SDK uses [AppAuth](https://github.com/openid/AppAuth-Android) to receive the
+authentication redirect. You choose the redirect scheme for your app by defining
+the `appAuthRedirectScheme` manifest placeholder in your app module's
+`build.gradle`. This must match the scheme of the redirect URLs you register in
+Kinde and pass to `KindeSDK`.
+
+```groovy
+android {
+    defaultConfig {
+        manifestPlaceholders = [appAuthRedirectScheme: 'com.example.myapp']
+    }
+}
+```
+
+With the placeholder above, your redirect URLs would look like:
+
+```kotlin
+val kinde = KindeSDK(
+    activity = this,
+    loginRedirect = "com.example.myapp://callback",
+    logoutRedirect = "com.example.myapp://logout",
+    sdkListener = listener
+)
+```
+
+> **Note:** Defining `appAuthRedirectScheme` is required. If the placeholder is
+> missing, the manifest merge will fail at build time. Earlier versions of the
+> SDK hardcoded a `kinde.sdk` scheme; to keep that behaviour, set
+> `appAuthRedirectScheme: 'kinde.sdk'`.
+
 ## Publishing
 
 The core team handles publishing.

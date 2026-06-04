@@ -236,34 +236,21 @@ class KindeSDK(
 
     init {
         activity.lifecycle.addObserver(this)
+        @Suppress("DEPRECATION")
         val appInfo = activity.packageManager.getApplicationInfo(
             activity.packageName,
             PackageManager.GET_META_DATA
         )
+        // Required configuration: fail fast so the SDK is never constructed in an
+        // invalid state. A missing value here is a developer/configuration error,
+        // not a runtime auth error, so it is thrown rather than routed through onException.
         val metaData = appInfo.metaData
-        configDomain = if (metaData.containsKey(DOMAIN_KEY)) {
-            metaData.getString(DOMAIN_KEY).orEmpty()
-        } else {
-            sdkListener.onException(IllegalStateException("$DOMAIN_KEY is not present at meta-data"))
-            ""
-        }
-        configClientId = if (metaData.containsKey(CLIENT_ID_KEY)) {
-            metaData.getString(CLIENT_ID_KEY).orEmpty()
-        } else {
-            sdkListener.onException(IllegalStateException("$CLIENT_ID_KEY is not present at meta-data"))
-            ""
-        }
-        audience = if (metaData.containsKey(AUDIENCE_KEY)) {
-            metaData.getString(AUDIENCE_KEY).orEmpty()
-        } else {
-            null
-        }
-        if (!loginRedirect.startsWith(REDIRECT_URI_SCHEME) ||
-            !logoutRedirect.startsWith(REDIRECT_URI_SCHEME)
-        ) {
-            sdkListener.onException(IllegalStateException("Check your redirect urls"))
-        }
-
+            ?: throw IllegalStateException("No meta-data found in AndroidManifest; $DOMAIN_KEY and $CLIENT_ID_KEY are required")
+        configDomain = metaData.getString(DOMAIN_KEY)?.takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("$DOMAIN_KEY is not present at meta-data")
+        configClientId = metaData.getString(CLIENT_ID_KEY)?.takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("$CLIENT_ID_KEY is not present at meta-data")
+        audience = metaData.getString(AUDIENCE_KEY)?.takeIf { it.isNotBlank() }
         serviceConfiguration = getServiceConfiguration(configDomain)
 
         store = Store(activity, configDomain)
@@ -1389,7 +1376,6 @@ class KindeSDK(
         private const val AUTH_URL = "https://%s/oauth2/auth"
         private const val TOKEN_URL = "https://%s/oauth2/token"
         private const val LOGOUT_URL = "https://%s/logout"
-        private const val REDIRECT_URI_SCHEME = "kinde.sdk://"
 
         private const val REGISTRATION_PAGE_PARAM_NAME = "start_page"
         private const val REGISTRATION_PAGE_PARAM_VALUE = "registration"
