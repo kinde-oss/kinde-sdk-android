@@ -37,10 +37,10 @@ val kinde = KindeSDK(
 )
 ```
 
-> **Note:** Defining `appAuthRedirectScheme` is required. If the placeholder is
-> missing, the manifest merge will fail at build time. Earlier versions of the
-> SDK hardcoded a `kinde.sdk` scheme; to keep that behaviour, set
-> `appAuthRedirectScheme: 'kinde.sdk'`.
+> **Note:** Defining `appAuthRedirectScheme` is required in your build.gradle. 
+> If the placeholder is missing, the manifest merge will fail at build time. 
+> Earlier versions of the SDK hardcoded a `kinde.sdk` scheme; to keep that this schema, set
+> `appAuthRedirectScheme: 'kinde.sdk'` in your build.gradle.
 
 ## Publishing
 
