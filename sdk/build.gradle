@@ -45,7 +45,7 @@ dependencies {
 
     implementation "com.squareup.retrofit2:retrofit:2.12.0"
     implementation "com.squareup.retrofit2:converter-gson:2.12.0"
-    implementation "androidx.browser:browser:1.4.0"
+    implementation "androidx.browser:browser:1.10.0"
     
     // Previously embedded, now declared as regular dependencies
     api "net.openid:appauth:0.11.1"
