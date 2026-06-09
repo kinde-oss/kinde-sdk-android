@@ -50,7 +50,7 @@ dependencies {
     // Previously embedded, now declared as regular dependencies
     api "net.openid:appauth:0.11.1"
     implementation "com.squareup.retrofit2:converter-scalars:2.9.0"
-    implementation "org.threeten:threetenbp:1.6.1"
+    implementation "org.threeten:threetenbp:1.7.3"
 }
 
 ext {
