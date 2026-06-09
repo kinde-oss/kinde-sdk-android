@@ -4,29 +4,6 @@ apply plugin: 'signing'
 group = PUBLISH_GROUP_ID
 version = sdk_version // Set up version in build.gradle at project's root
 
-task androidSourcesJar(type: Jar) {
-    archiveClassifier.set('sources')
-    if (project.plugins.findPlugin("com.android.library")) {
-        // Android libraries
-        from android.sourceSets.main.java.srcDirs
-        from android.sourceSets.main.kotlin.srcDirs
-    } else {
-        // Pure kotlin libraries
-        from sourceSets.main.java.srcDirs
-        from sourceSets.main.kotlin.srcDirs
-    }
-}
-
-task androidJavadocJar(type: Jar) {
-    archiveClassifier.set('javadoc')
-    // Empty Javadoc JAR for Maven Central requirement
-}
-
-artifacts {
-    archives androidSourcesJar
-    archives androidJavadocJar
-}
-
 afterEvaluate {
     publishing {
         publications {
@@ -41,9 +18,6 @@ afterEvaluate {
                 } else {
                     from components.java
                 }
-
-                artifact androidSourcesJar
-                artifact androidJavadocJar
 
                 pom {
                     name = PUBLISH_ARTIFACT_ID
