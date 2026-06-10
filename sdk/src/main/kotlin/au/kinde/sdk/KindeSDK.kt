@@ -246,11 +246,11 @@ class KindeSDK(
         // not a runtime auth error, so it is thrown rather than routed through onException.
         val metaData = appInfo.metaData
             ?: throw IllegalStateException("No meta-data found in AndroidManifest; $DOMAIN_KEY and $CLIENT_ID_KEY are required")
-        configDomain = metaData.getString(DOMAIN_KEY)?.takeIf { it.isNotBlank() }
+        configDomain = metaData.getString(DOMAIN_KEY)?.trim()?.takeIf { it.isNotBlank() }
             ?: throw IllegalStateException("$DOMAIN_KEY is not present at meta-data")
-        configClientId = metaData.getString(CLIENT_ID_KEY)?.takeIf { it.isNotBlank() }
+        configClientId = metaData.getString(CLIENT_ID_KEY)?.trim()?.takeIf { it.isNotBlank() }
             ?: throw IllegalStateException("$CLIENT_ID_KEY is not present at meta-data")
-        audience = metaData.getString(AUDIENCE_KEY)?.takeIf { it.isNotBlank() }
+        audience = metaData.getString(AUDIENCE_KEY)?.trim()?.takeIf { it.isNotBlank() }
         serviceConfiguration = getServiceConfiguration(configDomain)
 
         store = Store(activity, configDomain)
