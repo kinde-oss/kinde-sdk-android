@@ -1,1 +1,14 @@
+# Module build output
 /build
+
+# Generated files
+gen/
+out/
+release/
+
+# Built library artifacts
+*.aar
+*.ap_
+
+# Local configuration
+local.properties
