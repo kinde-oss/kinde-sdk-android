@@ -50,7 +50,7 @@ val kinde = KindeSDK(
 > your app module's `build.gradle` e.g.
 
 ```groovy
-// app/build.gradle  (your application module, NOT the SDK)
+// app/build.gradle 
 android {
     defaultConfig {
         manifestPlaceholders = [appAuthRedirectScheme: 'kinde.sdk']
