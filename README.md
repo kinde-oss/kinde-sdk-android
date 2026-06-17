@@ -18,8 +18,7 @@ the `appAuthRedirectScheme` manifest placeholder. This must match the scheme of
 the redirect URLs you register in Kinde and pass to `KindeSDK`.
 
 > **Important:** This placeholder must be set in **your own app module's**
-> `build.gradle` (e.g. `app/build.gradle`) — **not** in the Kinde SDK. You don't
-> need to (and can't) modify the SDK; you configure the scheme from your app.
+> `build.gradle` (e.g. `app/build.gradle`).
 
 ```groovy
 // app/build.gradle  (your application module, NOT the SDK)
