@@ -44,7 +44,7 @@ val kinde = KindeSDK(
 > module's `build.gradle` is required. If the placeholder is missing, the
 > manifest merge will fail at build time.
 >
-> **Upgrading from v1.5.0 or earlier:** those versions hardcoded the `kinde.sdk`
+> **Upgrading from v1.6.0 or earlier:** those versions hardcoded the `kinde.sdk`
 > scheme. To keep that exact behavior (keeping your redirect URLs or
 > Kinde dashboard configuration as `kinde.sdk`), set `appAuthRedirectScheme: 'kinde.sdk'` in
 > your app module's `build.gradle` e.g.
