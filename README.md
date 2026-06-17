@@ -21,7 +21,7 @@ the redirect URLs you register in Kinde and pass to `KindeSDK`.
 > `build.gradle` (e.g. `app/build.gradle`).
 
 ```groovy
-// app/build.gradle  (your application module, NOT the SDK)
+// app/build.gradle
 android {
     defaultConfig {
         manifestPlaceholders = [appAuthRedirectScheme: 'com.example.myapp']
