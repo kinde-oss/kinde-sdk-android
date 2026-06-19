@@ -1,23 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-          xmlns:tools="http://schemas.android.com/tools"
-          package="au.kinde.sdk">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <application>
-        <activity
-                android:name="net.openid.appauth.RedirectUriReceiverActivity"
-                android:exported="true"
-                tools:node="replace">
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-
-                <data android:scheme="kinde.sdk" />
-            </intent-filter>
-        </activity>
-    </application>
 </manifest>
