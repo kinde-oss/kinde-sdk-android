@@ -1,5 +1,6 @@
 package au.kinde.sdk
 
+import android.app.Activity
 import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
@@ -75,7 +76,7 @@ class KindeSDK(
     ) { result ->
         val data = result.data
 
-        if (result.resultCode == ComponentActivity.RESULT_CANCELED) {
+        if (result.resultCode == Activity.RESULT_CANCELED) {
             val wasHandlingInvitation = invitationState.isHandling
             invitationState.completeHandling()
 
@@ -98,7 +99,7 @@ class KindeSDK(
             }
         }
 
-        if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
+        if (result.resultCode == Activity.RESULT_OK && data != null) {
             val resp = AuthorizationResponse.fromIntent(data)
             val ex = AuthorizationException.fromIntent(data)
             synchronized(stateLock) {
@@ -140,7 +141,7 @@ class KindeSDK(
         val data = result.data
 
         when (result.resultCode) {
-            ComponentActivity.RESULT_CANCELED -> {
+            Activity.RESULT_CANCELED -> {
                 data?.let {
                     val ex = AuthorizationException.fromIntent(it)
                     ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
@@ -151,7 +152,7 @@ class KindeSDK(
                 }
                 scheduleTokenRefresh()
             }
-            ComponentActivity.RESULT_OK -> {
+            Activity.RESULT_OK -> {
                 val storeToClean = store
                 clearRuntimeOverrides()
 
