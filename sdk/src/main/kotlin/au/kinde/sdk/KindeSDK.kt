@@ -253,8 +253,10 @@ class KindeSDK(
             ?: throw IllegalStateException("$CLIENT_ID_KEY is not present at meta-data")
         // Prefer the namespaced key; fall back to the legacy non-namespaced "audience"
         // key for backwards compatibility with apps configured before the rename.
-        audience = (metaData.getString(AUDIENCE_KEY) ?: metaData.getString(AUDIENCE_KEY_LEGACY))
-            ?.trim()?.takeIf { it.isNotBlank() }
+        // Blank/whitespace-only values are treated as missing so a blank namespaced
+        // key does not shadow a valid legacy value.
+        audience = metaData.getString(AUDIENCE_KEY)?.trim()?.takeIf { it.isNotBlank() }
+            ?: metaData.getString(AUDIENCE_KEY_LEGACY)?.trim()?.takeIf { it.isNotBlank() }
         serviceConfiguration = getServiceConfiguration(configDomain)
 
         store = Store(activity, configDomain)
