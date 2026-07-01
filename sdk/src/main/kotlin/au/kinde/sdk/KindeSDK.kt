@@ -251,7 +251,10 @@ class KindeSDK(
             ?: throw IllegalStateException("$DOMAIN_KEY is not present at meta-data")
         configClientId = metaData.getString(CLIENT_ID_KEY)?.trim()?.takeIf { it.isNotBlank() }
             ?: throw IllegalStateException("$CLIENT_ID_KEY is not present at meta-data")
-        audience = metaData.getString(AUDIENCE_KEY)?.trim()?.takeIf { it.isNotBlank() }
+        // Prefer the namespaced key; fall back to the legacy non-namespaced "audience"
+        // key for backwards compatibility with apps configured before the rename.
+        audience = (metaData.getString(AUDIENCE_KEY) ?: metaData.getString(AUDIENCE_KEY_LEGACY))
+            ?.trim()?.takeIf { it.isNotBlank() }
         serviceConfiguration = getServiceConfiguration(configDomain)
 
         store = Store(activity, configDomain)
@@ -1372,7 +1375,8 @@ class KindeSDK(
     companion object {
         private const val DOMAIN_KEY = "au.kinde.domain"
         private const val CLIENT_ID_KEY = "au.kinde.clientId"
-        private const val AUDIENCE_KEY = "audience"
+        private const val AUDIENCE_KEY = "au.kinde.audience"
+        private const val AUDIENCE_KEY_LEGACY = "audience"
 
         private const val AUTH_URL = "https://%s/oauth2/auth"
         private const val TOKEN_URL = "https://%s/oauth2/token"
