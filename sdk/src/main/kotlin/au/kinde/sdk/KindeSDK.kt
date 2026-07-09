@@ -1,5 +1,6 @@
 package au.kinde.sdk
 
+import android.app.Activity
 import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
@@ -75,7 +76,7 @@ class KindeSDK(
     ) { result ->
         val data = result.data
 
-        if (result.resultCode == ComponentActivity.RESULT_CANCELED) {
+        if (result.resultCode == Activity.RESULT_CANCELED) {
             val wasHandlingInvitation = invitationState.isHandling
             invitationState.completeHandling()
 
@@ -98,7 +99,7 @@ class KindeSDK(
             }
         }
 
-        if (result.resultCode == ComponentActivity.RESULT_OK && data != null) {
+        if (result.resultCode == Activity.RESULT_OK && data != null) {
             val resp = AuthorizationResponse.fromIntent(data)
             val ex = AuthorizationException.fromIntent(data)
             synchronized(stateLock) {
@@ -140,7 +141,7 @@ class KindeSDK(
         val data = result.data
 
         when (result.resultCode) {
-            ComponentActivity.RESULT_CANCELED -> {
+            Activity.RESULT_CANCELED -> {
                 data?.let {
                     val ex = AuthorizationException.fromIntent(it)
                     ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
@@ -151,7 +152,7 @@ class KindeSDK(
                 }
                 scheduleTokenRefresh()
             }
-            ComponentActivity.RESULT_OK -> {
+            Activity.RESULT_OK -> {
                 val storeToClean = store
                 clearRuntimeOverrides()
 
@@ -250,7 +251,12 @@ class KindeSDK(
             ?: throw IllegalStateException("$DOMAIN_KEY is not present at meta-data")
         configClientId = metaData.getString(CLIENT_ID_KEY)?.trim()?.takeIf { it.isNotBlank() }
             ?: throw IllegalStateException("$CLIENT_ID_KEY is not present at meta-data")
+        // Prefer the namespaced key; fall back to the legacy non-namespaced "audience"
+        // key for backwards compatibility with apps configured before the rename.
+        // Blank/whitespace-only values are treated as missing so a blank namespaced
+        // key does not shadow a valid legacy value.
         audience = metaData.getString(AUDIENCE_KEY)?.trim()?.takeIf { it.isNotBlank() }
+            ?: metaData.getString(AUDIENCE_KEY_LEGACY)?.trim()?.takeIf { it.isNotBlank() }
         serviceConfiguration = getServiceConfiguration(configDomain)
 
         store = Store(activity, configDomain)
@@ -1371,7 +1377,8 @@ class KindeSDK(
     companion object {
         private const val DOMAIN_KEY = "au.kinde.domain"
         private const val CLIENT_ID_KEY = "au.kinde.clientId"
-        private const val AUDIENCE_KEY = "audience"
+        private const val AUDIENCE_KEY = "au.kinde.audience"
+        private const val AUDIENCE_KEY_LEGACY = "audience"
 
         private const val AUTH_URL = "https://%s/oauth2/auth"
         private const val TOKEN_URL = "https://%s/oauth2/token"
