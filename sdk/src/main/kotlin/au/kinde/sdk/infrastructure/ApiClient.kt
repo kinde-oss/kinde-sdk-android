@@ -5,6 +5,7 @@ import com.google.gson.GsonBuilder
 import okhttp3.Call
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
+import okhttp3.ResponseBody.Companion.toResponseBody
 import retrofit2.Converter
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
@@ -46,15 +47,15 @@ class ApiClient(
                     addInterceptor { chain ->
                         val request = chain.request()
                         val response = chain.proceed(request)
-                        val responseBody = response.body()
+                        val responseBody = response.body
                         val contentType = responseBody?.contentType()
                         val bodyString = responseBody?.string()
-                        android.util.Log.d("ApiClient", "URL: ${request.url()}")
-                        android.util.Log.d("ApiClient", "Response code: ${response.code()}")
+                        android.util.Log.d("ApiClient", "URL: ${request.url}")
+                        android.util.Log.d("ApiClient", "Response code: ${response.code}")
                         // Only log body length, not content, to avoid exposing sensitive data
                         android.util.Log.d("ApiClient", "Response body length: ${bodyString?.length ?: 0}")
                         response.newBuilder()
-                            .body(okhttp3.ResponseBody.create(contentType, bodyString ?: ""))
+                            .body((bodyString ?: "").toResponseBody(contentType))
                             .build()
                     }
                 }

@@ -30,7 +30,7 @@ fun <T> Call<T>.callApi(
                 } else {
                     Exception(
                         "response is unsuccessful for ${
-                            this.request().url()
+                            this.request().url
                         }:${response.code()} ${response.message()}"
                     )
                 }
