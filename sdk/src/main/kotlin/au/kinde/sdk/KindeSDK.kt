@@ -137,51 +137,10 @@ class KindeSDK(
 
     private val endTokenLauncher = activity.registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val data = result.data
-
-        when (result.resultCode) {
-            Activity.RESULT_CANCELED -> {
-                data?.let {
-                    val ex = AuthorizationException.fromIntent(it)
-                    ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
-                }
-
-                synchronized(stateLock) {
-                    isLoggingOut = false
-                }
-                scheduleTokenRefresh()
-            }
-            Activity.RESULT_OK -> {
-                val storeToClean = store
-                clearRuntimeOverrides()
-
-                synchronized(stateLock) {
-                    apiClient.setBearerToken("")
-                    storeToClean.clearState()
-                    state = AuthState(getServiceConfiguration(configDomain))
-                    isLoggingOut = false
-                }
-
-                sdkListener.onLogout()
-
-                data?.let {
-                    val ex = AuthorizationException.fromIntent(it)
-                    ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
-                }
-            }
-            else -> {
-                data?.let {
-                    val ex = AuthorizationException.fromIntent(it)
-                    ex?.let { sdkListener.onException(LogoutException("${ex.error} ${ex.errorDescription}")) }
-                }
-
-                synchronized(stateLock) {
-                    isLoggingOut = false
-                }
-                scheduleTokenRefresh()
-            }
-        }
+    ) { _ ->
+        // Local-first logout: clear the app session whether the browser
+        // end-session completed or the user dismissed/cancelled the Custom Tab.
+        completeLocalLogout()
     }
 
     private val configDomain: String
@@ -388,6 +347,24 @@ class KindeSDK(
             }
             createServices()
         }
+    }
+
+    /**
+     * Clears local auth state after logout is initiated, including when the
+     * browser end-session flow is cancelled or fails unexpectedly.
+     */
+    private fun completeLocalLogout() {
+        val storeToClean = store
+        clearRuntimeOverrides()
+
+        synchronized(stateLock) {
+            apiClient.setBearerToken("")
+            storeToClean.clearState()
+            state = AuthState(getServiceConfiguration(configDomain))
+            isLoggingOut = false
+        }
+
+        sdkListener.onLogout()
     }
 
     override fun getToken(tokenType: TokenType): String? = synchronized(stateLock) {
