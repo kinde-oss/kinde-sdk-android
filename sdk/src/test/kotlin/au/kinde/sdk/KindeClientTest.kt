@@ -142,6 +142,53 @@ class KindeClientTest {
     }
 
     @Test
+    fun `back navigation keeps an earlier facade's end-session launcher available`() {
+        installKindeMetaData(context)
+        val client = KindeClient.getInstance(context)
+        val launcherA = object : KindeClient.EndSessionLauncher {
+            override fun launchEndSession(intent: android.content.Intent) = Unit
+        }
+        val launcherB = object : KindeClient.EndSessionLauncher {
+            override fun launchEndSession(intent: android.content.Intent) = Unit
+        }
+
+        // Activity A attaches, activity B attaches on top, then B is destroyed
+        // (back navigation). A's launcher must remain the active fallback.
+        client.attachEndSessionLauncher(launcherA, "test.scheme://logout-a")
+        client.attachEndSessionLauncher(launcherB, "test.scheme://logout-b")
+        client.detachEndSessionLauncher(launcherB)
+
+        assertSame(launcherA, client.activeEndSessionLauncher())
+    }
+
+    @Test
+    fun `cancelled invitation flow can be retried`() {
+        installKindeMetaData(context)
+        val client = KindeClient.getInstance(context)
+        client.invitationState.startHandling("invite-1")
+
+        client.onAuthorizationResult(Activity.RESULT_CANCELED, null)
+
+        assertFalse(client.invitationState.isHandling)
+        assertFalse(client.invitationState.isProcessed("invite-1"))
+    }
+
+    @Test
+    fun `cancelled login notifies only the initiating listener`() {
+        installKindeMetaData(context)
+        val client = KindeClient.getInstance(context)
+        val initiator = RecordingListener()
+        val bystander = RecordingListener()
+        client.attachListener(initiator)
+        client.attachListener(bystander)
+
+        client.onAuthorizationResult(Activity.RESULT_CANCELED, null, initiator)
+
+        assertEquals(1, initiator.logoutCount)
+        assertEquals(0, bystander.logoutCount)
+    }
+
+    @Test
     fun `cancelled end-session resets logging-out flag so logout can be retried`() {
         installKindeMetaData(context)
         val client = KindeClient.getInstance(context)

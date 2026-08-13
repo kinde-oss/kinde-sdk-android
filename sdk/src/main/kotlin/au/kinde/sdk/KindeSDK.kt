@@ -46,7 +46,7 @@ class KindeSDK(
     private val launcher = activity.registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        client.onAuthorizationResult(result.resultCode, result.data)
+        client.onAuthorizationResult(result.resultCode, result.data, sdkListener)
     }
 
     private val endTokenLauncher = activity.registerForActivityResult(
@@ -196,7 +196,7 @@ class KindeSDK(
     }
 
     fun logout() {
-        client.logout(logoutRedirect)
+        client.logout(logoutRedirect) { endTokenLauncher.launch(it) }
     }
 
     /**

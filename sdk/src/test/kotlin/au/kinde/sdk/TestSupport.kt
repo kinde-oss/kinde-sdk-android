@@ -40,8 +40,8 @@ fun installKindeMetaData(
     clientId: String? = TEST_CLIENT_ID
 ) {
     val bundle = Bundle().apply {
-        domain?.let { putString("au.kinde.domain", it) }
-        clientId?.let { putString("au.kinde.clientId", it) }
+        domain?.let { putString(KindeClient.DOMAIN_KEY, it) }
+        clientId?.let { putString(KindeClient.CLIENT_ID_KEY, it) }
     }
     shadowOf(context.packageManager)
         .getInternalMutablePackageInfo(context.packageName)

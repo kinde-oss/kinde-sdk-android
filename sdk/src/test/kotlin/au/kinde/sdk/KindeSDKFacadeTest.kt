@@ -92,6 +92,26 @@ class KindeSDKFacadeTest {
     }
 
     @Test
+    fun `listener shared by two facades survives destruction of the first`() {
+        // Common pattern: one SDKListener implemented by the Application or a
+        // shared auth manager, passed to every activity's KindeSDK.
+        val shared = RecordingListener()
+        val (controllerA, _) = buildSdk(shared)
+        buildSdk(shared)
+        val afterConstruction = shared.logoutCount
+
+        // With both facades alive, a core event is delivered exactly once.
+        KindeClient.getInstance(context).onEndSessionResult(Activity.RESULT_OK, null)
+        assertEquals(afterConstruction + 1, shared.logoutCount)
+
+        // LoginActivity-style teardown: A is destroyed after B attached the same
+        // listener. B must keep receiving events.
+        controllerA.destroy()
+        KindeClient.getInstance(context).onEndSessionResult(Activity.RESULT_OK, null)
+        assertEquals(afterConstruction + 2, shared.logoutCount)
+    }
+
+    @Test
     fun `core state survives activity recreation`() {
         val listenerA = RecordingListener()
         val (controllerA, _) = buildSdk(listenerA)

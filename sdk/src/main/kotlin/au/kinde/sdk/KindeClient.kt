@@ -10,6 +10,7 @@ import android.util.Base64.URL_SAFE
 import android.util.Base64.decode
 import androidx.core.net.toUri
 import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import au.kinde.sdk.api.ApiOptions
@@ -56,7 +57,7 @@ import java.math.BigInteger
 import java.security.KeyFactory
 import java.security.Signature
 import java.security.spec.RSAPublicKeySpec
-import java.util.concurrent.CopyOnWriteArraySet
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.concurrent.thread
 
 /**
@@ -95,7 +96,10 @@ class KindeClient private constructor(
 
     @Volatile
     private lateinit var state: AuthState
-    private val authService = AuthorizationService(appContext)
+
+    // Created lazily: consumers that only read tokens (interceptors, workers)
+    // never need the browser service binding this creates.
+    private val authService by lazy { AuthorizationService(appContext) }
 
     internal val configDomain: String
     private val configClientId: String
@@ -137,18 +141,23 @@ class KindeClient private constructor(
     @Volatile
     private var activeBackgroundOperations = 0
 
-    // Listeners from all currently alive facades. Broadcasts must never happen
-    // while a lock is held (see the snapshot-then-notify pattern in getToken).
-    private val listeners = CopyOnWriteArraySet<SDKListener>()
+    // Listeners from all currently alive facades. A list (not a set) so two
+    // facades sharing one listener instance count as two attachments and the
+    // first facade's destroy cannot silence the second; broadcasts dedupe by
+    // instance. Broadcasts must never happen while a lock is held (see the
+    // snapshot-then-notify pattern in getToken).
+    private val listeners = CopyOnWriteArrayList<SDKListener>()
 
-    @Volatile
-    private var endSessionLauncher: EndSessionLauncher? = null
+    // Every alive facade's end-session launcher with its paired logout
+    // redirect. Background-triggered logouts fall back to the most recently
+    // attached route, so back-navigation destroying a newer activity does not
+    // strand logout without a browser launcher.
+    private data class EndSessionRoute(
+        val launcher: EndSessionLauncher,
+        val logoutRedirect: String
+    )
 
-    // Logout redirect supplied by the most recently attached facade, so a
-    // logout triggered from a background failure can still build the
-    // end-session request.
-    @Volatile
-    private var attachedLogoutRedirect: String? = null
+    private val endSessionRoutes = CopyOnWriteArrayList<EndSessionRoute>()
 
     // Centralized invitation state management
     internal val invitationState = InvitationState()
@@ -211,6 +220,11 @@ class KindeClient private constructor(
         // The refresh schedule follows the whole app's foreground state rather than
         // any single activity's, so navigation and recreation no longer cancel it.
         runOnMainThread {
+            // Seed from the current state: if the client is first created while the
+            // process is already backgrounded (worker, interceptor), no onStop will
+            // fire to pause the schedule.
+            isPaused = !ProcessLifecycleOwner.get().lifecycle.currentState
+                .isAtLeast(Lifecycle.State.STARTED)
             ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
                 override fun onStart(owner: LifecycleOwner) {
                     isPaused = false
@@ -242,32 +256,55 @@ class KindeClient private constructor(
     }
 
     internal fun detachListener(listener: SDKListener) {
+        // Removes one attachment only: a listener instance shared by several
+        // facades stays subscribed until its last facade is destroyed.
         listeners.remove(listener)
     }
 
     internal fun attachEndSessionLauncher(launcher: EndSessionLauncher, logoutRedirect: String) {
-        endSessionLauncher = launcher
-        attachedLogoutRedirect = logoutRedirect
+        endSessionRoutes.add(EndSessionRoute(launcher, logoutRedirect))
     }
 
     internal fun detachEndSessionLauncher(launcher: EndSessionLauncher) {
-        // Only clear if this facade is still the active one; a newer activity may
-        // have attached its own launcher before the old activity is destroyed.
-        if (endSessionLauncher === launcher) {
-            endSessionLauncher = null
-        }
+        endSessionRoutes.removeAll { it.launcher === launcher }
     }
 
+    @androidx.annotation.VisibleForTesting
+    internal fun activeEndSessionLauncher(): EndSessionLauncher? =
+        endSessionRoutes.lastOrNull()?.launcher
+
     private fun notifyNewToken(token: String) {
-        listeners.forEach { it.onNewToken(token) }
+        LinkedHashSet(listeners).forEach { it.onNewToken(token) }
     }
 
     private fun notifyLogout() {
-        listeners.forEach { it.onLogout() }
+        LinkedHashSet(listeners).forEach { it.onLogout() }
     }
 
     private fun notifyException(exception: Exception) {
-        listeners.forEach { it.onException(exception) }
+        val snapshot = LinkedHashSet(listeners)
+        if (snapshot.isEmpty()) {
+            // Nothing attached (e.g. client warmed up from Application.onCreate);
+            // surface the failure somewhere rather than dropping it silently.
+            android.util.Log.w("KindeSDK", "No SDKListener attached; dropping exception", exception)
+            return
+        }
+        snapshot.forEach { it.onException(exception) }
+    }
+
+    // Flow-level events (a cancelled or failed browser round-trip) go to the
+    // facade that initiated the flow when known, matching the pre-refactor
+    // per-activity behavior; session-level events still broadcast.
+    private fun notifyNewTokenTo(target: SDKListener?, token: String) {
+        target?.onNewToken(token) ?: notifyNewToken(token)
+    }
+
+    private fun notifyLogoutTo(target: SDKListener?) {
+        target?.onLogout() ?: notifyLogout()
+    }
+
+    private fun notifyExceptionTo(target: SDKListener?, exception: Exception) {
+        target?.onException(exception) ?: notifyException(exception)
     }
 
     /**
@@ -276,6 +313,13 @@ class KindeClient private constructor(
      * restored session, or a logout signal when no session exists.
      */
     internal fun notifyInitialState(listener: SDKListener) {
+        // Pre-refactor, every activity construction re-ran the keys fetch, so a
+        // transient failure self-healed on the next screen. Preserve that: retry
+        // whenever a facade attaches and keys are still missing.
+        if (store.getKeys().isNullOrEmpty()) {
+            initializeStoreData()
+        }
+
         val stateJson = store.getState()
         if (!stateJson.isNullOrEmpty()) {
             if (isAuthenticated()) {
@@ -465,7 +509,10 @@ class KindeClient private constructor(
         authorize(type, orgCode, null, params, null, null, null, loginRedirect, scopes, launch)
     }
 
-    internal fun logout(logoutRedirect: String? = null) {
+    internal fun logout(
+        logoutRedirect: String? = null,
+        launch: ((Intent) -> Unit)? = null
+    ) {
         synchronized(stateLock) {
             if (isLoggingOut) return
             isLoggingOut = true
@@ -477,7 +524,6 @@ class KindeClient private constructor(
 
         val effectiveDomain = runtimeDomain ?: configDomain
         val logoutServiceConfig = getServiceConfiguration(effectiveDomain)
-        val effectiveRedirect = logoutRedirect ?: attachedLogoutRedirect
 
         thread {
             synchronized(stateLock) {
@@ -497,19 +543,28 @@ class KindeClient private constructor(
                 }
             }
             tokenRefreshHandler.post {
-                val launcher = endSessionLauncher
-                if (launcher != null && effectiveRedirect != null) {
+                fun endSessionIntent(redirect: String): Intent {
                     val endSessionRequest = EndSessionRequest.Builder(logoutServiceConfig)
-                        .setPostLogoutRedirectUri(effectiveRedirect.toUri())
-                        .setAdditionalParameters(mapOf(REDIRECT_PARAM_NAME to effectiveRedirect))
+                        .setPostLogoutRedirectUri(redirect.toUri())
+                        .setAdditionalParameters(mapOf(REDIRECT_PARAM_NAME to redirect))
                         .setState(null)
                         .build()
-                    launcher.launchEndSession(authService.getEndSessionRequestIntent(endSessionRequest))
-                } else {
-                    // No activity is attached (e.g. a background refresh failed after the
-                    // UI was destroyed), so the end-session browser round-trip is
-                    // impossible. Clear the local session directly.
-                    completeLogoutLocally()
+                    return authService.getEndSessionRequestIntent(endSessionRequest)
+                }
+
+                val fallbackRoute = endSessionRoutes.lastOrNull()
+                when {
+                    // The initiating facade supplied its own launcher: use it with
+                    // its own redirect, exactly like the login flows do.
+                    launch != null && logoutRedirect != null ->
+                        launch(endSessionIntent(logoutRedirect))
+                    // Background-triggered logout: route through any alive facade,
+                    // with the redirect that facade was configured with.
+                    fallbackRoute != null ->
+                        fallbackRoute.launcher.launchEndSession(endSessionIntent(fallbackRoute.logoutRedirect))
+                    // No activity is attached at all, so the end-session browser
+                    // round-trip is impossible. Clear the local session directly.
+                    else -> completeLogoutLocally()
                 }
             }
         }
@@ -530,14 +585,25 @@ class KindeClient private constructor(
         notifyLogout()
     }
 
-    internal fun onAuthorizationResult(resultCode: Int, data: Intent?) {
+    internal fun onAuthorizationResult(
+        resultCode: Int,
+        data: Intent?,
+        originListener: SDKListener? = null
+    ) {
         if (resultCode == Activity.RESULT_CANCELED) {
             val wasHandlingInvitation = invitationState.isHandling
-            invitationState.completeHandling()
+            if (wasHandlingInvitation) {
+                // Fully forget an abandoned invitation so tapping the same
+                // invitation link (or retrying manually) can start the flow again;
+                // dedupe is only meant to prevent re-processing after success.
+                invitationState.reset()
+            } else {
+                invitationState.completeHandling()
+            }
 
             if (data != null) {
                 val ex = AuthorizationException.fromIntent(data)
-                ex?.let { notifyException(AuthException("${ex.error} ${ex.errorDescription}")) }
+                ex?.let { notifyExceptionTo(originListener, AuthException("${ex.error} ${ex.errorDescription}")) }
                 clearRuntimeOverrides()
             }
 
@@ -548,9 +614,9 @@ class KindeClient private constructor(
             }
 
             if (isAuthenticated()) {
-                synchronized(stateLock) { state.accessToken }?.let { notifyNewToken(it) }
+                synchronized(stateLock) { state.accessToken }?.let { notifyNewTokenTo(originListener, it) }
             } else {
-                notifyLogout()
+                notifyLogoutTo(originListener)
             }
         }
 
@@ -579,11 +645,17 @@ class KindeClient private constructor(
                 }
             }
             ex?.let {
-                notifyException(AuthException("${ex.error} ${ex.errorDescription}"))
-                invitationState.completeHandling()
+                notifyExceptionTo(originListener, AuthException("${ex.error} ${ex.errorDescription}"))
+                if (invitationState.isHandling) {
+                    // A failed invitation flow must stay retryable (see the
+                    // RESULT_CANCELED branch).
+                    invitationState.reset()
+                } else {
+                    invitationState.completeHandling()
+                }
                 refreshState()
                 if (!isAuthenticated()) {
-                    notifyLogout()
+                    notifyLogoutTo(originListener)
                 }
                 clearRuntimeOverrides()
             }
@@ -1417,8 +1489,8 @@ class KindeClient private constructor(
             instance = null
         }
 
-        private const val DOMAIN_KEY = "au.kinde.domain"
-        private const val CLIENT_ID_KEY = "au.kinde.clientId"
+        internal const val DOMAIN_KEY = "au.kinde.domain"
+        internal const val CLIENT_ID_KEY = "au.kinde.clientId"
         private const val AUDIENCE_KEY = "au.kinde.audience"
         private const val AUDIENCE_KEY_LEGACY = "audience"
 
