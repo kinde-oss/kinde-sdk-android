@@ -258,6 +258,23 @@ class KindeClientTest {
     }
 
     @Test
+    fun `refresh is skipped only when another refresh rotated the token mid-wait`() {
+        installKindeMetaData(context)
+        val client = KindeClient.getInstance(context)
+
+        // A concurrent refresh rotated the token: replaying the old one would be
+        // treated as reuse, so the stale request must be skipped.
+        assertTrue(client.shouldSkipStaleRefresh("old-token", "rotated-token"))
+        // Same token means the earlier refresh failed or didn't rotate: retrying
+        // with it is the correct behavior.
+        assertFalse(client.shouldSkipStaleRefresh("same-token", "same-token"))
+        // Missing either side (fresh login, cleared session): proceed and let the
+        // normal error handling decide.
+        assertFalse(client.shouldSkipStaleRefresh(null, "rotated-token"))
+        assertFalse(client.shouldSkipStaleRefresh("old-token", null))
+    }
+
+    @Test
     fun `cancelled end-session resets logging-out flag so logout can be retried`() {
         installKindeMetaData(context)
         val client = KindeClient.getInstance(context)

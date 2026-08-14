@@ -606,6 +606,15 @@ class KindeClient private constructor(
         }
     }
 
+    @androidx.annotation.VisibleForTesting
+    internal fun shouldSkipStaleRefresh(
+        requestRefreshToken: String?,
+        currentRefreshToken: String?
+    ): Boolean =
+        requestRefreshToken != null &&
+            currentRefreshToken != null &&
+            requestRefreshToken != currentRefreshToken
+
     private fun recoverStaleLogout() {
         synchronized(stateLock) {
             if (isLoggingOut && System.currentTimeMillis() - logoutStartedAt >= logoutResultTimeoutMs) {
@@ -1184,6 +1193,19 @@ class KindeClient private constructor(
                     if (isLoggingOut) return false
                 }
                 isRefreshing = true
+            }
+
+            // The request was built before any wait above. If another refresh
+            // completed in the meantime and rotated the refresh token, replaying
+            // the old token would be treated as reuse and could revoke the whole
+            // session — the state is already fresh, so report success instead.
+            val currentRefreshToken = synchronized(stateLock) { state.refreshToken }
+            if (shouldSkipStaleRefresh(tokenRequest.refreshToken, currentRefreshToken)) {
+                synchronized(refreshLock) {
+                    isRefreshing = false
+                    refreshLock.notifyAll()
+                }
+                return true
             }
         }
 
