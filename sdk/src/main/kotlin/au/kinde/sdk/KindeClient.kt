@@ -1400,6 +1400,15 @@ class KindeClient private constructor(
                     val tokenRequest = try {
                         state.createTokenRefreshRequest()
                     } catch (e: IllegalStateException) {
+                        // Expected when a concurrent logout cleared the state — stop
+                        // quietly. For a live session it means the refresh loop is
+                        // ending (e.g. no refresh token was granted), which the app
+                        // should hear about rather than discovering via an expired
+                        // token.
+                        android.util.Log.w("KindeSDK", "Token refresh stopped: cannot create refresh request", e)
+                        if (isAuthenticated()) {
+                            notifyException(TokenException("Token refresh stopped: ${e.message}"))
+                        }
                         return@thread
                     }
                     val success = getToken(tokenRequest, notifyListener = false)
