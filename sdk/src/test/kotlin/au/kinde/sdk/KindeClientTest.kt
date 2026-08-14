@@ -189,6 +189,75 @@ class KindeClientTest {
     }
 
     @Test
+    fun `logout completes locally when the browser launch fails`() {
+        installKindeMetaData(context)
+        val client = KindeClient.getInstance(context)
+        val listener = RecordingListener()
+        client.attachListener(listener)
+        // Robolectric has no browser installed, so building the end-session
+        // intent throws inside AppAuth — the launch must fail, and logout must
+        // still complete instead of staying pending forever.
+        val launcher = object : KindeClient.EndSessionLauncher {
+            override fun launchEndSession(intent: android.content.Intent) = Unit
+        }
+        client.attachEndSessionLauncher(launcher, "test.scheme://logout")
+
+        client.logout()
+
+        assertTrue(
+            "expected logout to fall back to local completion",
+            awaitCondition { listener.logoutCount == 1 }
+        )
+        assertFalse(client.isLogoutInProgress())
+    }
+
+    @Test
+    fun `logout stuck on a lost end-session result can be retried`() {
+        installKindeMetaData(context)
+        val client = KindeClient.getInstance(context)
+        val listener = RecordingListener()
+        client.attachListener(listener)
+        // Simulate a logout whose browser result was lost long ago.
+        client.markLoggingOutForTest(startedAtMs = 0L)
+
+        client.logout()
+
+        assertTrue(
+            "expected retried logout to complete after the stale one",
+            awaitCondition { listener.logoutCount == 1 }
+        )
+        assertFalse(client.isLogoutInProgress())
+    }
+
+    @Test
+    fun `recent pending logout is not restarted`() {
+        installKindeMetaData(context)
+        val client = KindeClient.getInstance(context)
+        val listener = RecordingListener()
+        client.attachListener(listener)
+        client.markLoggingOutForTest(startedAtMs = System.currentTimeMillis())
+
+        client.logout()
+
+        // The first logout is still within its result window; the second call
+        // must not tear the session down underneath it.
+        awaitCondition(timeoutMs = 250) { false }
+        assertEquals(0, listener.logoutCount)
+        assertTrue(client.isLogoutInProgress())
+    }
+
+    @Test
+    fun `attaching a facade clears stale logout state`() {
+        installKindeMetaData(context)
+        val client = KindeClient.getInstance(context)
+        client.markLoggingOutForTest(startedAtMs = 0L)
+
+        client.notifyInitialState(RecordingListener())
+
+        assertFalse(client.isLogoutInProgress())
+    }
+
+    @Test
     fun `cancelled end-session resets logging-out flag so logout can be retried`() {
         installKindeMetaData(context)
         val client = KindeClient.getInstance(context)

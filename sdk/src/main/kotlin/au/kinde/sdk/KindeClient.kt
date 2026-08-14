@@ -138,6 +138,17 @@ class KindeClient private constructor(
     @Volatile
     private var isLoggingOut = false
 
+    // When the in-flight logout claimed the flag. The end-session browser result
+    // can be lost (initiating activity destroyed with the tab open), and with a
+    // process-wide client a lost result must not block logout/refresh forever.
+    @Volatile
+    private var logoutStartedAt = 0L
+
+    // How long to wait for the end-session result before treating the logout as
+    // abandoned and allowing recovery.
+    @androidx.annotation.VisibleForTesting
+    internal var logoutResultTimeoutMs = 60_000L
+
     @Volatile
     private var activeBackgroundOperations = 0
 
@@ -313,6 +324,11 @@ class KindeClient private constructor(
      * restored session, or a logout signal when no session exists.
      */
     internal fun notifyInitialState(listener: SDKListener) {
+        // Pre-refactor, a recreated activity started with a fresh instance, which
+        // implicitly recovered from a logout whose browser result was lost. With a
+        // shared client, recover explicitly when a new facade attaches.
+        recoverStaleLogout()
+
         // Pre-refactor, every activity construction re-ran the keys fetch, so a
         // transient failure self-healed on the next screen. Preserve that: retry
         // whenever a facade attaches and keys are still missing.
@@ -514,8 +530,13 @@ class KindeClient private constructor(
         launch: ((Intent) -> Unit)? = null
     ) {
         synchronized(stateLock) {
-            if (isLoggingOut) return
+            if (isLoggingOut) {
+                val stale = System.currentTimeMillis() - logoutStartedAt >= logoutResultTimeoutMs
+                if (!stale) return
+                android.util.Log.w("KindeSDK", "Previous logout never received its end-session result; restarting logout")
+            }
             isLoggingOut = true
+            logoutStartedAt = System.currentTimeMillis()
         }
 
         clearCache()
@@ -553,22 +574,57 @@ class KindeClient private constructor(
                 }
 
                 val fallbackRoute = endSessionRoutes.lastOrNull()
-                when {
-                    // The initiating facade supplied its own launcher: use it with
-                    // its own redirect, exactly like the login flows do.
-                    launch != null && logoutRedirect != null ->
-                        launch(endSessionIntent(logoutRedirect))
-                    // Background-triggered logout: route through any alive facade,
-                    // with the redirect that facade was configured with.
-                    fallbackRoute != null ->
-                        fallbackRoute.launcher.launchEndSession(endSessionIntent(fallbackRoute.logoutRedirect))
-                    // No activity is attached at all, so the end-session browser
-                    // round-trip is impossible. Clear the local session directly.
-                    else -> completeLogoutLocally()
+                val launched = try {
+                    when {
+                        // The initiating facade supplied its own launcher: use it with
+                        // its own redirect, exactly like the login flows do.
+                        launch != null && logoutRedirect != null -> {
+                            launch(endSessionIntent(logoutRedirect))
+                            true
+                        }
+                        // Background-triggered logout: route through any alive facade,
+                        // with the redirect that facade was configured with.
+                        fallbackRoute != null -> {
+                            fallbackRoute.launcher.launchEndSession(endSessionIntent(fallbackRoute.logoutRedirect))
+                            true
+                        }
+                        else -> false
+                    }
+                } catch (e: Exception) {
+                    // Launcher or browser unavailable (activity destroyed mid-logout,
+                    // no browser installed): no result will ever arrive, so don't
+                    // leave the logout pending forever.
+                    android.util.Log.w("KindeSDK", "End-session launch failed; completing logout locally", e)
+                    false
+                }
+                if (!launched) {
+                    // No end-session browser round-trip is possible; clear the
+                    // local session directly.
+                    completeLogoutLocally()
                 }
             }
         }
     }
+
+    private fun recoverStaleLogout() {
+        synchronized(stateLock) {
+            if (isLoggingOut && System.currentTimeMillis() - logoutStartedAt >= logoutResultTimeoutMs) {
+                android.util.Log.w("KindeSDK", "End-session result never arrived; clearing stale logout state")
+                isLoggingOut = false
+            }
+        }
+    }
+
+    @androidx.annotation.VisibleForTesting
+    internal fun markLoggingOutForTest(startedAtMs: Long) {
+        synchronized(stateLock) {
+            isLoggingOut = true
+            logoutStartedAt = startedAtMs
+        }
+    }
+
+    @androidx.annotation.VisibleForTesting
+    internal fun isLogoutInProgress(): Boolean = synchronized(stateLock) { isLoggingOut }
 
     /** Clears the local session; the terminal step of a successful logout. */
     private fun completeLogoutLocally() {
