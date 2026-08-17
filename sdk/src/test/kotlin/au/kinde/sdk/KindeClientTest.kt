@@ -280,11 +280,18 @@ class KindeClientTest {
         val client = KindeClient.getInstance(context)
         val listener = RecordingListener()
         client.attachListener(listener)
+        // A logout must actually be pending for the cancellation to have state to
+        // clear; a recent timestamp keeps the stale-recovery path out of play.
+        client.markLoggingOutForTest(startedAtMs = System.currentTimeMillis())
 
         // Simulate the browser round-trip being cancelled by the user.
         client.onEndSessionResult(Activity.RESULT_CANCELED, null)
 
+        assertFalse(client.isLogoutInProgress())
+
         // Session must remain usable and a fresh logout must still be possible.
+        // This only works if the cancellation cleared the flag: the pending logout
+        // was recent, so the stale-recovery path would not let a retry through.
         client.logout()
         assertTrue(
             "expected logout after a cancelled end-session to complete",

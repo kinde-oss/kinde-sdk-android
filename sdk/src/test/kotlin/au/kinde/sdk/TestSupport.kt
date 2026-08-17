@@ -3,25 +3,31 @@ package au.kinde.sdk
 import android.content.Context
 import android.os.Bundle
 import android.os.Looper
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
 import org.robolectric.Shadows.shadowOf
 
 /**
  * Listener that records every callback so tests can assert on what reached it.
- * onException is recorded but never asserted against zero: the client's init
- * fires an async JWKS fetch at an unroutable test domain, which legitimately
- * reports a failure.
+ * Thread-safe: the client notifies from background threads while tests read
+ * from the test thread. onException is recorded but never asserted against
+ * zero: the client's init fires an async JWKS fetch at an unroutable test
+ * domain, which legitimately reports a failure.
  */
 class RecordingListener : SDKListener {
-    val tokens = mutableListOf<String>()
-    var logoutCount = 0
-    val exceptions = mutableListOf<Exception>()
+    val tokens = CopyOnWriteArrayList<String>()
+    val exceptions = CopyOnWriteArrayList<Exception>()
+    private val logouts = AtomicInteger(0)
+
+    val logoutCount: Int
+        get() = logouts.get()
 
     override fun onNewToken(token: String) {
         tokens.add(token)
     }
 
     override fun onLogout() {
-        logoutCount++
+        logouts.incrementAndGet()
     }
 
     override fun onException(exception: Exception) {
