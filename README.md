@@ -58,6 +58,24 @@ android {
 }
 ```
 
+## Accessing tokens without an Activity
+
+Token state, refresh scheduling and API access live in an application-scoped
+core, `KindeClient`, which is shared by every `KindeSDK` instance and survives
+activity recreation. Wherever you need a token and don't have an activity — an
+OkHttp interceptor, a background worker — use the core directly:
+
+```kotlin
+val client = KindeClient.getInstance(context)
+val accessToken = client.getToken(TokenType.ACCESS_TOKEN)
+```
+
+Login, registration and logout open a browser tab, so they still require an
+activity-bound `KindeSDK`, constructed in `onCreate` as shown above. Creating a
+`KindeSDK` in every activity's `onCreate` (including after rotation) remains the
+intended pattern — it is a thin facade, and all of them share the same
+`KindeClient` state underneath.
+
 ## Publishing
 
 The core team handles publishing.
