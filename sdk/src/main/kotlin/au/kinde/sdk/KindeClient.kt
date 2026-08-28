@@ -106,9 +106,10 @@ class KindeClient private constructor(
     private val configClientId: String
     internal val audience: String?
 
-    // What this instance was configured with: the verbatim programmatic config,
-    // or the resolved manifest values. getInstance compares later non-null
-    // configs against this to reject conflicting re-configuration.
+    // What this instance was configured with: the programmatic config (audience
+    // normalized by getInstance), or the resolved manifest values. getInstance
+    // compares later non-null configs against this to reject conflicting
+    // re-configuration.
     internal val activeConfig: KindeConfig
 
     // Runtime overrides for domain and clientId (cleared on logout)
@@ -1555,20 +1556,25 @@ class KindeClient private constructor(
             getOrCreate(context, config)
 
         private fun getOrCreate(context: Context, config: KindeConfig?): KindeClient {
-            config?.let {
+            val normalized = config?.let {
                 require(isValidDomain(it.domain)) {
                     "Invalid domain: '${it.domain}'. Domain must be a valid hostname without scheme, path, or special characters."
                 }
                 require(isValidClientId(it.clientId)) {
                     "Invalid client ID: '${it.clientId}'. Client ID must be non-blank and contain no whitespace or control characters."
                 }
+                // Canonicalize audience the way the client resolves it (trim,
+                // blank -> null) so the conflict check compares effective
+                // configurations, not raw strings. Domain and clientId need no
+                // normalization: validation rejects any whitespace in them.
+                it.copy(audience = it.audience?.trim()?.takeIf { a -> a.isNotBlank() })
             }
             val client = instance ?: synchronized(this) {
-                instance ?: KindeClient(context.applicationContext, config).also { instance = it }
+                instance ?: KindeClient(context.applicationContext, normalized).also { instance = it }
             }
             // Also covers a creation race: a thread that lost the synchronized
             // re-check must not silently proceed against the winner's config.
-            check(config == null || config == client.activeConfig) {
+            check(normalized == null || normalized == client.activeConfig) {
                 "KindeClient is already initialized with a different configuration " +
                     "(active domain: ${client.activeConfig.domain}). Pass the config to " +
                     "getInstance in Application.onCreate before any other SDK use " +

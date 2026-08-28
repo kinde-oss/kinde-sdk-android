@@ -97,6 +97,30 @@ class KindeClientConfigTest {
     }
 
     @Test
+    fun `equivalent config differing only in audience whitespace returns the same instance`() {
+        val first = KindeClient.getInstance(
+            context, KindeConfig(TEST_DOMAIN, TEST_CLIENT_ID, TEST_AUDIENCE)
+        )
+
+        val padded = KindeClient.getInstance(
+            context, KindeConfig(TEST_DOMAIN, TEST_CLIENT_ID, "  $TEST_AUDIENCE  ")
+        )
+
+        assertSame(first, padded)
+    }
+
+    @Test
+    fun `blank audience on a later call matches an instance created without one`() {
+        val first = KindeClient.getInstance(context, KindeConfig(TEST_DOMAIN, TEST_CLIENT_ID))
+
+        val blank = KindeClient.getInstance(
+            context, KindeConfig(TEST_DOMAIN, TEST_CLIENT_ID, audience = "   ")
+        )
+
+        assertSame(first, blank)
+    }
+
+    @Test
     fun `conflicting config on a later call throws IllegalStateException`() {
         KindeClient.getInstance(context, KindeConfig(TEST_DOMAIN, TEST_CLIENT_ID))
 
