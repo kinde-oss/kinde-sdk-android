@@ -37,17 +37,23 @@ class RecordingListener : SDKListener {
 
 /** The .invalid TLD is guaranteed unresolvable, so init's keys fetch fails harmlessly offline. */
 const val TEST_DOMAIN = "unit-test.kinde.invalid"
+const val TEST_DOMAIN_US = "us.unit-test.kinde.invalid"
 const val TEST_CLIENT_ID = "test_client_id"
+const val TEST_AUDIENCE = "https://test-api.kinde.invalid"
 
 /** Injects the manifest meta-data KindeClient's constructor requires. */
 fun installKindeMetaData(
     context: Context,
     domain: String? = TEST_DOMAIN,
-    clientId: String? = TEST_CLIENT_ID
+    clientId: String? = TEST_CLIENT_ID,
+    audience: String? = null,
+    legacyAudience: String? = null
 ) {
     val bundle = Bundle().apply {
         domain?.let { putString(KindeClient.DOMAIN_KEY, it) }
         clientId?.let { putString(KindeClient.CLIENT_ID_KEY, it) }
+        audience?.let { putString(KindeClient.AUDIENCE_KEY, it) }
+        legacyAudience?.let { putString(KindeClient.AUDIENCE_KEY_LEGACY, it) }
     }
     shadowOf(context.packageManager)
         .getInternalMutablePackageInfo(context.packageName)
