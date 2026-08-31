@@ -80,7 +80,8 @@ import kotlin.concurrent.thread
  * an activity-bound [KindeSDK].
  */
 class KindeClient private constructor(
-    private val appContext: Context
+    private val appContext: Context,
+    initialConfig: KindeConfig?
 ) : TokenProvider, ClaimApi by ClaimDelegate {
 
     /**
@@ -103,7 +104,13 @@ class KindeClient private constructor(
 
     internal val configDomain: String
     private val configClientId: String
-    private val audience: String?
+    internal val audience: String?
+
+    // What this instance was configured with: the programmatic config (audience
+    // normalized by getInstance), or the resolved manifest values. getInstance
+    // compares later non-null configs against this to reject conflicting
+    // re-configuration.
+    internal val activeConfig: KindeConfig
 
     // Runtime overrides for domain and clientId (cleared on logout)
     @Volatile
@@ -189,26 +196,37 @@ class KindeClient private constructor(
     private var flagsCache: CacheEntry<Map<String, Flag>>? = null
 
     init {
-        @Suppress("DEPRECATION")
-        val appInfo = appContext.packageManager.getApplicationInfo(
-            appContext.packageName,
-            PackageManager.GET_META_DATA
-        )
-        // Required configuration: fail fast so the SDK is never constructed in an
-        // invalid state. A missing value here is a developer/configuration error,
-        // not a runtime auth error, so it is thrown rather than routed through onException.
-        val metaData = appInfo.metaData
-            ?: throw IllegalStateException("No meta-data found in AndroidManifest; $DOMAIN_KEY and $CLIENT_ID_KEY are required")
-        configDomain = metaData.getString(DOMAIN_KEY)?.trim()?.takeIf { it.isNotBlank() }
-            ?: throw IllegalStateException("$DOMAIN_KEY is not present at meta-data")
-        configClientId = metaData.getString(CLIENT_ID_KEY)?.trim()?.takeIf { it.isNotBlank() }
-            ?: throw IllegalStateException("$CLIENT_ID_KEY is not present at meta-data")
-        // Prefer the namespaced key; fall back to the legacy non-namespaced "audience"
-        // key for backwards compatibility with apps configured before the rename.
-        // Blank/whitespace-only values are treated as missing so a blank namespaced
-        // key does not shadow a valid legacy value.
-        audience = metaData.getString(AUDIENCE_KEY)?.trim()?.takeIf { it.isNotBlank() }
-            ?: metaData.getString(AUDIENCE_KEY_LEGACY)?.trim()?.takeIf { it.isNotBlank() }
+        if (initialConfig != null) {
+            // Programmatic configuration is authoritative for all three values:
+            // the manifest is not consulted at all, so a null audience means
+            // "no audience" rather than "fall back to meta-data". Domain and
+            // clientId were already validated in getInstance.
+            configDomain = initialConfig.domain
+            configClientId = initialConfig.clientId
+            audience = initialConfig.audience?.trim()?.takeIf { it.isNotBlank() }
+        } else {
+            @Suppress("DEPRECATION")
+            val appInfo = appContext.packageManager.getApplicationInfo(
+                appContext.packageName,
+                PackageManager.GET_META_DATA
+            )
+            // Required configuration: fail fast so the SDK is never constructed in an
+            // invalid state. A missing value here is a developer/configuration error,
+            // not a runtime auth error, so it is thrown rather than routed through onException.
+            val metaData = appInfo.metaData
+                ?: throw IllegalStateException("No meta-data found in AndroidManifest; $DOMAIN_KEY and $CLIENT_ID_KEY are required")
+            configDomain = metaData.getString(DOMAIN_KEY)?.trim()?.takeIf { it.isNotBlank() }
+                ?: throw IllegalStateException("$DOMAIN_KEY is not present at meta-data")
+            configClientId = metaData.getString(CLIENT_ID_KEY)?.trim()?.takeIf { it.isNotBlank() }
+                ?: throw IllegalStateException("$CLIENT_ID_KEY is not present at meta-data")
+            // Prefer the namespaced key; fall back to the legacy non-namespaced "audience"
+            // key for backwards compatibility with apps configured before the rename.
+            // Blank/whitespace-only values are treated as missing so a blank namespaced
+            // key does not shadow a valid legacy value.
+            audience = metaData.getString(AUDIENCE_KEY)?.trim()?.takeIf { it.isNotBlank() }
+                ?: metaData.getString(AUDIENCE_KEY_LEGACY)?.trim()?.takeIf { it.isNotBlank() }
+        }
+        activeConfig = initialConfig ?: KindeConfig(configDomain, configClientId, audience)
         serviceConfiguration = getServiceConfiguration(configDomain)
 
         store = Store(appContext, configDomain)
@@ -349,54 +367,6 @@ class KindeClient private constructor(
         } else {
             listener.onLogout()
         }
-    }
-
-    /**
-     * Validates a domain string to ensure it's a valid hostname
-     * without scheme, path, whitespace, or special characters.
-     *
-     * Enforces RFC 1035 constraints:
-     * - Total length ≤ 255 characters
-     * - Each label (part between dots) ≤ 63 characters
-     * - Labels must start/end with alphanumeric, hyphens only in middle
-     *
-     * @param domain The domain to validate
-     * @return true if valid, false otherwise
-     */
-    private fun isValidDomain(domain: String): Boolean {
-        if (domain.isBlank()) return false
-
-        // Check for invalid characters and patterns
-        if (domain.contains("://") ||  // no scheme
-            domain.contains("/") ||    // no path
-            domain.contains("@") ||     // no credentials
-            domain.contains(" ") ||     // no whitespace
-            domain.contains("\t") ||    // no tabs
-            domain.contains("\n") ||    // no newlines
-            domain.contains("\r")
-        ) {    // no carriage returns
-            return false
-        }
-
-        // RFC 1035 compliant hostname validation with length constraints
-        // - Max 255 chars total
-        // - Each label max 63 chars
-        // - Labels start/end with alphanumeric, hyphens only in middle
-        val hostnameRegex =
-            "^(?!.{256,})[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$".toRegex()
-        return hostnameRegex.matches(domain)
-    }
-
-    /**
-     * Validates a client ID string to ensure it's non-blank
-     * and contains no whitespace or control characters.
-     *
-     * @param clientId The client ID to validate
-     * @return true if valid, false otherwise
-     */
-    private fun isValidClientId(clientId: String): Boolean {
-        if (clientId.isBlank()) return false
-        return clientId.none { it.isWhitespace() || it.isISOControl() }
     }
 
     /**
@@ -1561,14 +1531,105 @@ class KindeClient private constructor(
         private var instance: KindeClient? = null
 
         /**
-         * Returns the process-wide [KindeClient], creating it on first use.
+         * Returns the process-wide [KindeClient], creating it on first use from
+         * the AndroidManifest meta-data configuration (or returning the instance
+         * a previous [getInstance] call created, however it was configured).
          * Only the application context is retained, so any context is safe to pass.
          */
         @JvmStatic
-        fun getInstance(context: Context): KindeClient =
-            instance ?: synchronized(this) {
-                instance ?: KindeClient(context.applicationContext).also { instance = it }
+        fun getInstance(context: Context): KindeClient = getOrCreate(context, null)
+
+        /**
+         * Returns the process-wide [KindeClient], creating it on first use from
+         * [config] instead of the AndroidManifest meta-data (which is not read
+         * at all — the meta-data keys may be omitted). Call in
+         * `Application.onCreate`, before any other SDK use.
+         *
+         * @throws IllegalArgumentException if [config] holds an invalid domain
+         * or client ID.
+         * @throws IllegalStateException if the client already exists with a
+         * different configuration — the configuration is fixed for the life of
+         * the process.
+         */
+        @JvmStatic
+        fun getInstance(context: Context, config: KindeConfig): KindeClient =
+            getOrCreate(context, config)
+
+        private fun getOrCreate(context: Context, config: KindeConfig?): KindeClient {
+            val normalized = config?.let {
+                require(isValidDomain(it.domain)) {
+                    "Invalid domain: '${it.domain}'. Domain must be a valid hostname without scheme, path, or special characters."
+                }
+                require(isValidClientId(it.clientId)) {
+                    "Invalid client ID: '${it.clientId}'. Client ID must be non-blank and contain no whitespace or control characters."
+                }
+                // Canonicalize audience the way the client resolves it (trim,
+                // blank -> null) so the conflict check compares effective
+                // configurations, not raw strings. Domain and clientId need no
+                // normalization: validation rejects any whitespace in them.
+                it.copy(audience = it.audience?.trim()?.takeIf { a -> a.isNotBlank() })
             }
+            val client = instance ?: synchronized(this) {
+                instance ?: KindeClient(context.applicationContext, normalized).also { instance = it }
+            }
+            // Also covers a creation race: a thread that lost the synchronized
+            // re-check must not silently proceed against the winner's config.
+            check(normalized == null || normalized == client.activeConfig) {
+                "KindeClient is already initialized with a different configuration " +
+                    "(active domain: ${client.activeConfig.domain}). Pass the config to " +
+                    "getInstance in Application.onCreate before any other SDK use " +
+                    "(note: ContentProviders initialize before Application.onCreate)."
+            }
+            return client
+        }
+
+        /**
+         * Validates a domain string to ensure it's a valid hostname
+         * without scheme, path, whitespace, or special characters.
+         *
+         * Enforces RFC 1035 constraints:
+         * - Total length ≤ 255 characters
+         * - Each label (part between dots) ≤ 63 characters
+         * - Labels must start/end with alphanumeric, hyphens only in middle
+         *
+         * @param domain The domain to validate
+         * @return true if valid, false otherwise
+         */
+        private fun isValidDomain(domain: String): Boolean {
+            if (domain.isBlank()) return false
+
+            // Check for invalid characters and patterns
+            if (domain.contains("://") ||  // no scheme
+                domain.contains("/") ||    // no path
+                domain.contains("@") ||     // no credentials
+                domain.contains(" ") ||     // no whitespace
+                domain.contains("\t") ||    // no tabs
+                domain.contains("\n") ||    // no newlines
+                domain.contains("\r")
+            ) {    // no carriage returns
+                return false
+            }
+
+            // RFC 1035 compliant hostname validation with length constraints
+            // - Max 255 chars total
+            // - Each label max 63 chars
+            // - Labels start/end with alphanumeric, hyphens only in middle
+            val hostnameRegex =
+                "^(?!.{256,})[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$".toRegex()
+            return hostnameRegex.matches(domain)
+        }
+
+        /**
+         * Validates a client ID string to ensure it's non-blank
+         * and contains no whitespace or control characters.
+         *
+         * @param clientId The client ID to validate
+         * @return true if valid, false otherwise
+         */
+        private fun isValidClientId(clientId: String): Boolean {
+            if (clientId.isBlank()) return false
+            return clientId.none { it.isWhitespace() || it.isISOControl() }
+        }
 
         /** Test-only: drops the singleton so each test starts from a clean state. */
         @androidx.annotation.VisibleForTesting
@@ -1578,8 +1639,8 @@ class KindeClient private constructor(
 
         internal const val DOMAIN_KEY = "au.kinde.domain"
         internal const val CLIENT_ID_KEY = "au.kinde.clientId"
-        private const val AUDIENCE_KEY = "au.kinde.audience"
-        private const val AUDIENCE_KEY_LEGACY = "audience"
+        internal const val AUDIENCE_KEY = "au.kinde.audience"
+        internal const val AUDIENCE_KEY_LEGACY = "audience"
 
         private const val AUTH_URL = "https://%s/oauth2/auth"
         private const val TOKEN_URL = "https://%s/oauth2/token"

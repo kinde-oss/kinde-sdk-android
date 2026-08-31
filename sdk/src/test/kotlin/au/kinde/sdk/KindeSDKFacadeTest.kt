@@ -112,6 +112,20 @@ class KindeSDKFacadeTest {
     }
 
     @Test
+    fun `facade picks up a programmatically configured core`() {
+        // Configure before any facade exists, as an Application.onCreate would.
+        // The @Before-installed manifest points at TEST_DOMAIN; the config must win.
+        val configured = KindeClient.getInstance(context, KindeConfig(TEST_DOMAIN_US, TEST_CLIENT_ID))
+        val listener = RecordingListener()
+
+        buildSdk(listener)
+
+        org.junit.Assert.assertSame(configured, KindeClient.getInstance(context))
+        assertEquals(TEST_DOMAIN_US, configured.configDomain)
+        assertEquals(1, listener.logoutCount)
+    }
+
+    @Test
     fun `core state survives activity recreation`() {
         val listenerA = RecordingListener()
         val (controllerA, _) = buildSdk(listenerA)
