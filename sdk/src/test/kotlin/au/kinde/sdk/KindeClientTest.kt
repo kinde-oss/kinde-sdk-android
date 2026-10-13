@@ -298,4 +298,63 @@ class KindeClientTest {
             awaitCondition { listener.logoutCount == 1 }
         )
     }
+
+    private fun accessToken(vararg claims: Pair<String, Any?>): String {
+        val now = System.currentTimeMillis() / 1000
+        val base = mutableMapOf<String, Any?>("iss" to "https://$TEST_DOMAIN", "exp" to now + 3600, "aud" to org.json.JSONArray())
+        claims.forEach { (k, v) -> if (v == null) base.remove(k) else base[k] = v }
+        val enc = java.util.Base64.getUrlEncoder().withoutPadding()
+        return enc.encodeToString("""{"alg":"RS256"}""".toByteArray()) + "." +
+            enc.encodeToString(org.json.JSONObject(base).toString().toByteArray()) + ".sig"
+    }
+
+    private fun problem(token: String, canRefresh: Boolean = false, audience: String? = null) =
+        KindeClient.getInstance(context).accessTokenProblem(token, "https://$TEST_DOMAIN/", audience, canRefresh, System.currentTimeMillis())
+
+    @Test
+    fun `an unexpired token from this domain backs a session`() {
+        installKindeMetaData(context)
+
+        assertNull(problem(accessToken()))
+    }
+
+    @Test
+    fun `an expired token without a refresh token does not`() {
+        installKindeMetaData(context)
+        val now = System.currentTimeMillis() / 1000
+
+        assertTrue(problem(accessToken("exp" to now - 3600))!!.contains("expired"))
+        assertTrue("missing exp counts as expired", problem(accessToken("exp" to null))!!.contains("expired"))
+    }
+
+    @Test
+    fun `an expired token with a refresh token still does, since the SDK renews it`() {
+        installKindeMetaData(context)
+        val now = System.currentTimeMillis() / 1000
+
+        assertNull(problem(accessToken("exp" to now - 3600), canRefresh = true))
+    }
+
+    @Test
+    fun `a token from another issuer does not`() {
+        installKindeMetaData(context)
+
+        assertTrue(problem(accessToken("iss" to "https://evil.example.com"), canRefresh = true)!!.contains("issuer"))
+    }
+
+    @Test
+    fun `with an audience configured, the token must be for it`() {
+        installKindeMetaData(context)
+
+        assertTrue(problem(accessToken(), audience = "https://api.example.com")!!.contains("audience"))
+        assertNull(problem(accessToken("aud" to org.json.JSONArray(listOf("https://api.example.com"))), audience = "https://api.example.com"))
+    }
+
+    @Test
+    fun `clock drift of up to a minute is tolerated`() {
+        installKindeMetaData(context)
+        val now = System.currentTimeMillis() / 1000
+
+        assertNull(problem(accessToken("exp" to now - 30)))
+    }
 }
