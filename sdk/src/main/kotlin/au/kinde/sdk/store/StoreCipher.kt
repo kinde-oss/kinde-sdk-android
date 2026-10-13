@@ -210,6 +210,12 @@ internal class StoreCipher private constructor(
             return StoreCipher(writer, listOf(keystore, software))
         }
 
+        /** Test hook: use these key sources instead of the real ones. */
+        @androidx.annotation.VisibleForTesting
+        internal fun installForTest(writer: KeySource, readers: List<KeySource>) {
+            instance = StoreCipher(writer, readers)
+        }
+
         /** Test hook: start over with a fresh choice of key source. */
         @androidx.annotation.VisibleForTesting
         internal fun resetForTest() {

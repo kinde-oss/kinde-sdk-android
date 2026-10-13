@@ -238,4 +238,56 @@ class StoreTest {
         assertNull(Store(context, domain).getState())
         assertNull(rawPrefs().getString("auth_state", null))
     }
+
+    // -- Transient encryption failures ---------------------------------------------------
+
+    /** A software key source like the SDK's fallback, with a fixed key. */
+    private class FixedSoftwareSource : StoreCipher.KeySource {
+        private val key = SecretKeySpec(ByteArray(32) { 7 }, "AES")
+        override val prefix = StoreCipher.SOFTWARE_PREFIX
+        override val generatesIv = false
+        override fun key() = key
+        override fun existingKey() = key
+    }
+
+    /** A Keystore that is temporarily unavailable: every key access throws. */
+    private class FailingKeystoreSource : StoreCipher.KeySource {
+        override val prefix = StoreCipher.KEYSTORE_PREFIX
+        override val generatesIv = true
+        override fun key(): javax.crypto.SecretKey = throw java.security.ProviderException("keystore busy")
+        override fun existingKey(): javax.crypto.SecretKey = throw java.security.ProviderException("keystore busy")
+    }
+
+    @Test
+    fun `a fallback value is still returned when moving it to the new key fails`() {
+        val software = FixedSoftwareSource()
+        StoreCipher.installForTest(writer = software, readers = listOf(software))
+        Store(context, domain).saveState("written-by-fallback")
+        val stored = rawPrefs().getString("auth_state", null)
+
+        StoreCipher.installForTest(writer = FailingKeystoreSource(), readers = listOf(FailingKeystoreSource(), software))
+
+        assertEquals("written-by-fallback", Store(context, domain).getState())
+        assertEquals("kept for a later retry", stored, rawPrefs().getString("auth_state", null))
+    }
+
+    @Test
+    fun `a legacy value is still returned when re-encrypting it fails`() {
+        writeLegacy("auth_state", "legacy-state")
+        StoreCipher.installForTest(writer = FailingKeystoreSource(), readers = listOf(FailingKeystoreSource()))
+
+        assertEquals("legacy-state", Store(context, domain).getState())
+        assertFalse("still in the legacy format", StoreCipher.isCurrentFormat(rawPrefs().getString("auth_state", null)!!))
+        assertNotNull("legacy IV kept for the retry", rawPrefs().getString("iv", null))
+    }
+
+    @Test
+    fun `a save that can't be encrypted doesn't throw or leave stale data`() {
+        Store(context, domain).saveState("old-session")
+        StoreCipher.installForTest(writer = FailingKeystoreSource(), readers = listOf(FailingKeystoreSource()))
+
+        Store(context, domain).saveState("new-session")
+
+        assertNull("the stale value is not restored later", rawPrefs().getString("auth_state", null))
+    }
 }

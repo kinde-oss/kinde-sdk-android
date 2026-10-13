@@ -55,7 +55,22 @@ class Store(context: Context, private val key: String) {
     // One process-wide lock: several Store instances can point at the same file,
     // and the SDK writes from the main thread and background threads at once.
     private fun store(dataKey: String, data: String) = synchronized(LOCK) {
-        authPrefs.edit().putString(dataKey, cipher.encrypt(data)).apply()
+        val encrypted = tryEncrypt(dataKey, data)
+        if (encrypted != null) {
+            authPrefs.edit().putString(dataKey, encrypted).apply()
+        } else {
+            // Leaving the previous value would restore stale tokens (e.g. a refresh
+            // token that has since been rotated) on the next launch.
+            authPrefs.edit().remove(dataKey).apply()
+        }
+    }
+
+    /** Null when encryption fails right now (e.g. a transient Keystore error); callers must not throw. */
+    private fun tryEncrypt(dataKey: String, plain: String): String? = try {
+        cipher.encrypt(plain)
+    } catch (e: Exception) {
+        Log.w(TAG, "Could not encrypt $dataKey", e)
+        null
     }
 
     private fun retrieve(dataKey: String): String? = synchronized(LOCK) {
@@ -65,8 +80,9 @@ class Store(context: Context, private val key: String) {
                 is StoreCipher.Decrypted.Value -> {
                     // Written with the fallback key while the keystore was unavailable:
                     // move it to the key new values use now.
+                    // If that fails now, keep the readable value and try again on a later read.
                     if (!cipher.isWriteFormat(stored)) {
-                        authPrefs.edit().putString(dataKey, cipher.encrypt(result.plain)).apply()
+                        tryEncrypt(dataKey, result.plain)?.let { authPrefs.edit().putString(dataKey, it).apply() }
                     }
                     result.plain
                 }
@@ -90,7 +106,10 @@ class Store(context: Context, private val key: String) {
             Log.w(TAG, "Discarding unreadable legacy $dataKey")
             editor.remove(dataKey)
         } else {
-            editor.putString(dataKey, cipher.encrypt(plain))
+            // Re-encryption can fail transiently; keep the legacy value (and its IV)
+            // for a later read rather than failing this one.
+            val encrypted = tryEncrypt(dataKey, plain) ?: return plain
+            editor.putString(dataKey, encrypted)
         }
         val legacyLeft = listOf(AUTH_STATE_PREF, KEYS_PREF).any { other ->
             other != dataKey && authPrefs.getString(other, null)?.let { !StoreCipher.isCurrentFormat(it) } == true
