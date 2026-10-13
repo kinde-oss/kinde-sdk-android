@@ -123,6 +123,7 @@ class KindeClient private constructor(
     private val apiClient: ApiClient
     private lateinit var keysApi: KeysApi
     private lateinit var oAuthApi: OAuthApi
+    @Suppress("DEPRECATION")
     private lateinit var usersApi: UsersApi
     private lateinit var permissionsApi: PermissionsApi
     private lateinit var rolesApi: RolesApi
@@ -786,16 +787,61 @@ class KindeClient private constructor(
 
     fun getEntitlements(): EntitlementsResponse? = callApi(oAuthApi.getEntitlements())
 
-    fun createUser(createUserRequest: CreateUserRequest? = null): CreateUser200Response? =
-        callApi(usersApi.createUser(createUserRequest))
+    /**
+     * Creates a user through the Kinde Management API.
+     *
+     * Kinde's Management API only accepts machine-to-machine tokens, so this call is
+     * refused with a signed-in user's token, and the M2M client secret must never be
+     * shipped in an app. Create users from your backend; for sign-up use [KindeSDK.register].
+     */
+    @Deprecated(
+        "Calls the Kinde Management API, which only accepts machine-to-machine tokens. Their client " +
+            "secret must never ship in an app, so call the Management API from your backend instead. " +
+            "Will be removed in the next major version."
+    )
+    fun createUser(createUserRequest: CreateUserRequest? = null): CreateUser200Response? {
+        warnManagementApi("createUser")
+        @Suppress("DEPRECATION")
+        return callApi(usersApi.createUser(createUserRequest))
+    }
 
+    /**
+     * Lists every user in the business through the Kinde Management API.
+     *
+     * Kinde's Management API only accepts machine-to-machine tokens, so this call is
+     * refused with a signed-in user's token, and the M2M client secret must never be
+     * shipped in an app. List users from your backend; for the signed-in user use
+     * [getUserDetails], [getUser] or [getUserProfileV2].
+     */
+    @Deprecated(
+        "Calls the Kinde Management API, which only accepts machine-to-machine tokens. Their client " +
+            "secret must never ship in an app, so call the Management API from your backend instead. " +
+            "Will be removed in the next major version."
+    )
     fun getUsers(
         sort: kotlin.String? = null,
         pageSize: kotlin.Int? = null,
         userId: kotlin.Int? = null,
         nextToken: kotlin.String? = null
-    ): kotlin.collections.List<User>? =
-        callApi(usersApi.getUsers(sort, pageSize, userId, nextToken))
+    ): kotlin.collections.List<User>? {
+        warnManagementApi("getUsers")
+        @Suppress("DEPRECATION")
+        return callApi(usersApi.getUsers(sort, pageSize, userId, nextToken))
+    }
+
+    private val warnedManagementCalls = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    /** Logs once per method and process, so the reason reaches developers who miss the IDE warning. */
+    private fun warnManagementApi(method: String) {
+        if (warnedManagementCalls.add(method)) {
+            android.util.Log.w(
+                "KindeSDK",
+                "$method() is deprecated: it calls the Kinde Management API, which only accepts " +
+                    "machine-to-machine tokens, so Kinde refuses it with a signed-in user's token. Call the " +
+                    "Management API from your backend instead. It will be removed in the next major version."
+            )
+        }
+    }
 
     /**
      * Get all permissions for the authenticated user
@@ -1451,6 +1497,7 @@ class KindeClient private constructor(
         tokenRepository = TokenRepository(apiClient.createService(TokenApi::class.java), BuildConfig.SDK_VERSION)
         keysApi = apiClient.createService(KeysApi::class.java)
         oAuthApi = apiClient.createService(OAuthApi::class.java)
+        @Suppress("DEPRECATION")
         usersApi = apiClient.createService(UsersApi::class.java)
         permissionsApi = apiClient.createService(PermissionsApi::class.java)
         rolesApi = apiClient.createService(RolesApi::class.java)

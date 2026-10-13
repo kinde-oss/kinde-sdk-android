@@ -236,9 +236,23 @@ class KindeSDK(
 
     fun getEntitlements(): EntitlementsResponse? = client.getEntitlements()
 
+    /** See [KindeClient.createUser]. */
+    @Deprecated(
+        "Calls the Kinde Management API, which only accepts machine-to-machine tokens. Their client " +
+            "secret must never ship in an app, so call the Management API from your backend instead. " +
+            "Will be removed in the next major version."
+    )
+    @Suppress("DEPRECATION")
     fun createUser(createUserRequest: CreateUserRequest? = null): CreateUser200Response? =
         client.createUser(createUserRequest)
 
+    /** See [KindeClient.getUsers]. */
+    @Deprecated(
+        "Calls the Kinde Management API, which only accepts machine-to-machine tokens. Their client " +
+            "secret must never ship in an app, so call the Management API from your backend instead. " +
+            "Will be removed in the next major version."
+    )
+    @Suppress("DEPRECATION")
     fun getUsers(
         sort: kotlin.String? = null,
         pageSize: kotlin.Int? = null,

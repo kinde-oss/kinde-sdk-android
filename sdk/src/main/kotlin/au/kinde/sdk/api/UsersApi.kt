@@ -9,6 +9,12 @@ import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.Query
 
+/** The two Kinde Management API endpoints the SDK exposed. See [au.kinde.sdk.KindeClient.getUsers]. */
+@Deprecated(
+    "Calls the Kinde Management API, which only accepts machine-to-machine tokens. Their client " +
+    "secret must never ship in an app, so call the Management API from your backend instead. " +
+    "Will be removed in the next major version."
+)
 interface UsersApi {
 
     @POST("api/v1/user")
