@@ -58,6 +58,16 @@ android {
 }
 ```
 
+## Sign-in security
+
+`login()`, `register()` and `createOrg()` use PKCE (S256) and a nonce by default, as
+RFC 8252 recommends for native apps; the SDK performs the code exchange itself, so
+nothing changes in your code. Every ID token the SDK receives is checked before it is
+saved (issuer, audience, expiry, issue time, and on sign-in the nonce); a token that
+fails is rejected and reported to `SDKListener.onException`.
+
+`GrantType.NONE` still disables PKCE for compatibility, but is deprecated.
+
 ## Accessing tokens without an Activity
 
 Token state, refresh scheduling and API access live in an application-scoped
