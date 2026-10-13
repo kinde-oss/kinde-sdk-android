@@ -150,7 +150,7 @@ object ClaimDelegate : ClaimApi {
                         val list = data.getJSONArray(claim)
                         val claims = mutableListOf<String>()
                         for (i in 0 until list.length()) {
-                            claims.add(list.getString(i))
+                            listEntry(claim, list.get(i))?.let { claims.add(it) }
                         }
                         claims as T
                     }
@@ -164,6 +164,21 @@ object ClaimDelegate : ClaimApi {
                 null
             }
         }
+    }
+
+    /**
+     * One entry of a list claim. Kinde's roles claim holds objects such as
+     * `{"id": "...", "key": "admin", "name": "Admin"}`; those contribute their key.
+     * Plain strings (permissions, org_codes, and roles from older tokens) are used as-is.
+     */
+    private fun listEntry(claim: String, entry: Any?): String? = when (entry) {
+        is JSONObject -> entry.optString("key").takeIf { it.isNotBlank() }
+            ?: run {
+                Log.w("KindeClaim", "Skipping an entry of \"$claim\" with no key")
+                null
+            }
+        null, JSONObject.NULL -> null
+        else -> entry.toString()
     }
 
     private const val PERMISSIONS_CLAIM = "permissions"
