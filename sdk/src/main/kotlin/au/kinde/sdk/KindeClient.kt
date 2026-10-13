@@ -585,6 +585,32 @@ class KindeClient private constructor(
             currentRefreshToken != null &&
             requestRefreshToken != currentRefreshToken
 
+    /**
+     * True when the token endpoint refused the refresh token itself, as opposed to
+     * a transient failure (no network, 5xx) after which the session is still good.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun isRefreshTokenRejected(ex: AuthorizationException?): Boolean =
+        ex != null && (ex.error == "invalid_grant" || ex.code == java.net.HttpURLConnection.HTTP_UNAUTHORIZED)
+
+    /**
+     * Ends a session whose refresh token Kinde no longer accepts. The server-side
+     * session is already gone, so there is nothing to end in the browser: clear it
+     * locally and tell listeners, without opening an end-session tab mid-use.
+     */
+    private fun signOutAfterRejectedRefresh() {
+        synchronized(stateLock) {
+            if (isLoggingOut) return
+            isLoggingOut = true
+            logoutStartedAt = System.currentTimeMillis()
+        }
+        android.util.Log.w("KindeSDK", "Refresh token rejected by Kinde; signing out")
+        clearCache()
+        invitationState.reset()
+        cancelTokenRefresh()
+        tokenRefreshHandler.post { completeLogoutLocally() }
+    }
+
     private fun recoverStaleLogout() {
         synchronized(stateLock) {
             if (isLoggingOut && System.currentTimeMillis() - logoutStartedAt >= logoutResultTimeoutMs) {
@@ -1237,20 +1263,16 @@ class KindeClient private constructor(
 
             scheduleTokenRefresh()
         } else {
-            // Check if this is a 401/invalid_grant error (invalid refresh token)
-            val isInvalidRefreshToken = ex?.let { exception ->
-                val is401 = exception.message?.contains("401") == true
-                val isInvalidGrant = exception.error == "invalid_grant"
-                is401 || isInvalidGrant
-            } ?: false
+            ex?.let { notifyException(TokenException(listOfNotNull(ex.error, ex.errorDescription).joinToString(" "))) }
 
-            ex?.let { notifyException(TokenException("${ex.error} ${ex.errorDescription}")) }
-
-            // Always logout on invalid refresh token (401/invalid_grant)
-            // For other errors, only logout if notifyListener is true (manual refresh)
+            // Kinde rejected the refresh token itself (revoked, expired or reused):
+            // the session is over and retrying can't fix it.
+            val refreshTokenRejected = grantType == "refresh_token" && isRefreshTokenRejected(ex)
             try {
-                if (isInvalidRefreshToken || notifyListener) {
-                    logout()
+                when {
+                    refreshTokenRejected -> signOutAfterRejectedRefresh()
+                    // A failed interactive sign-in clears the half-finished session.
+                    notifyListener -> logout()
                 }
             } finally {
                 if (grantType == "refresh_token") {
@@ -1383,7 +1405,9 @@ class KindeClient private constructor(
                     }
                     val success = getToken(tokenRequest, notifyListener = false)
                     if (!success && !isLoggingOut) {
-                        postTokenRefresh(retryDelayMs, retryDelayMs)
+                        // Transient failure (offline, server error): keep the session but back
+                        // off, rather than retrying every 10s for as long as the app is open.
+                        postTokenRefresh(retryDelayMs, nextRetryDelay(retryDelayMs))
                     }
                 } finally {
                     synchronized(stateLock) {
@@ -1394,6 +1418,9 @@ class KindeClient private constructor(
             }
         }
     }
+
+    @androidx.annotation.VisibleForTesting
+    internal fun nextRetryDelay(currentMs: Long): Long = minOf(currentMs * 2, MAX_REFRESH_RETRY_DELAY_MS)
 
     private fun cancelTokenRefresh() {
         tokenRefreshRunnable?.let { tokenRefreshHandler.removeCallbacks(it) }
@@ -1665,5 +1692,6 @@ class KindeClient private constructor(
         // Cache configuration
         private const val CACHE_TTL_MS = 60_000L // 60 seconds
         private const val TOKEN_REFRESH_BUFFER_MS = 10_000L // 10 seconds
+        private const val MAX_REFRESH_RETRY_DELAY_MS = 5 * 60_000L // 5 minutes
     }
 }

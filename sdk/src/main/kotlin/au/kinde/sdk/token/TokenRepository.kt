@@ -1,6 +1,7 @@
 package au.kinde.sdk.token
 
-import au.kinde.sdk.utils.callApi
+import android.os.Looper
+import au.kinde.sdk.WrongThreadException
 import net.openid.appauth.AuthState
 import net.openid.appauth.AuthorizationException
 import net.openid.appauth.AuthorizationException.AuthorizationRequestErrors.SERVER_ERROR
@@ -23,27 +24,33 @@ class TokenRepository(private val tokenApi: TokenApi, private val version: Strin
         authState: AuthState,
         tokenRequest: TokenRequest
     ): Pair<TokenResponse?, AuthorizationException?> {
-        val (tokenResponseString, exception) =
-            tokenApi.retrieveToken(
-                LANGUAGE_HEADER.format(version),
-                tokenRequest.requestParameters.apply {
-                    put(TokenRequest.PARAM_CLIENT_ID, tokenRequest.clientId)
-                }).callApi(authState, true)
-        if (exception != null) return Pair(
-            null,
-            AuthorizationException(
-                TYPE_GENERAL_ERROR,
-                SERVER_ERROR.code,
-                null,
-                exception.message,
-                null,
-                exception
-            )
-        )
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return Pair(null, generalError("Token requests must not run on the main thread", WrongThreadException))
+        }
+        val call = tokenApi.retrieveToken(
+            LANGUAGE_HEADER.format(version),
+            tokenRequest.requestParameters.apply {
+                put(TokenRequest.PARAM_CLIENT_ID, tokenRequest.clientId)
+            })
+        val response = try {
+            call.execute()
+        } catch (e: Exception) {
+            // No response at all (offline, DNS, TLS): transient, never a reason to sign out.
+            return Pair(null, generalError(e.message, e))
+        }
 
-        val json = JSONObject(tokenResponseString.orEmpty())
-        if (json.has(AuthorizationException.PARAM_ERROR)) {
-            val ex: AuthorizationException? = try {
+        // Token endpoints report OAuth errors (invalid_grant for a revoked or expired
+        // refresh token, invalid_client, ...) in the body of a 4xx response, so read
+        // the body whatever the status.
+        val body = if (response.isSuccessful) response.body().orEmpty() else response.errorBody()?.string().orEmpty()
+        val json = try {
+            JSONObject(body)
+        } catch (e: JSONException) {
+            null
+        }
+
+        if (json != null && json.has(AuthorizationException.PARAM_ERROR)) {
+            val ex: AuthorizationException = try {
                 val error: String = json.getString(AuthorizationException.PARAM_ERROR)
                 AuthorizationException.fromOAuthTemplate(
                     TokenRequestErrors.byString(error),
@@ -61,7 +68,15 @@ class TokenRepository(private val tokenApi: TokenApi, private val version: Strin
             }
             return Pair(null, ex)
         }
-        val response: TokenResponse = try {
+
+        if (!response.isSuccessful || json == null) {
+            return Pair(
+                null,
+                generalError("Token request failed: HTTP ${response.code()} ${response.message()}", null, response.code())
+            )
+        }
+
+        val tokenResponse: TokenResponse = try {
             TokenResponse.Builder(tokenRequest).fromResponseJson(json).build()
         } catch (jsonEx: JSONException) {
             return Pair(
@@ -74,8 +89,22 @@ class TokenRepository(private val tokenApi: TokenApi, private val version: Strin
         }
 
         Logger.debug("Token exchange with %s completed")
-        return Pair(response, null)
+        return Pair(tokenResponse, null)
     }
+
+    /**
+     * A failure with no OAuth error from the server: network problems, 5xx, or an
+     * unexpected body. [AuthorizationException.code] carries the HTTP status when
+     * there was one, so callers can tell a server refusal from a transient failure.
+     */
+    private fun generalError(message: String?, cause: Throwable?, httpStatus: Int? = null) = AuthorizationException(
+        TYPE_GENERAL_ERROR,
+        httpStatus ?: SERVER_ERROR.code,
+        null,
+        message,
+        null,
+        cause
+    )
 
     private companion object {
         private const val LANGUAGE_HEADER = "Kotlin/%s"
