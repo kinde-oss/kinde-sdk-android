@@ -76,6 +76,36 @@ activity-bound `KindeSDK`, constructed in `onCreate` as shown above. Creating a
 intended pattern — it is a thin facade, and all of them share the same
 `KindeClient` state underneath.
 
+## Token storage
+
+The SDK keeps the session (access, ID and refresh tokens) and the signing keys in a
+per-domain SharedPreferences file, encrypted with AES-256-GCM. The key is normally
+generated in the Android Keystore and never leaves the device, so a copy of the file
+can't be read elsewhere. If the Keystore can't be used, the SDK falls back to a random
+software key stored in the `app_prefs_secure_key` SharedPreferences file. Sessions saved
+by 2.2.0 and earlier are re-encrypted automatically on first read, so users stay signed
+in across the upgrade.
+
+Keystore keys are not included in backups, so a Keystore-encrypted session restored onto
+another device can't be decrypted and reads as signed out. A session encrypted with the
+software fallback key *can* be restored, together with its key, unless the app's backup
+rules exclude both SharedPreferences files. Exclude shared preferences from backups:
+
+```xml
+<!-- AndroidManifest.xml -->
+<application android:dataExtractionRules="@xml/data_extraction_rules" ...>
+
+<!-- res/xml/data_extraction_rules.xml -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="." />
+    </device-transfer>
+</data-extraction-rules>
+```
+
 ## Publishing
 
 The core team handles publishing.
