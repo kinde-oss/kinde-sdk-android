@@ -298,4 +298,35 @@ class KindeClientTest {
             awaitCondition { listener.logoutCount == 1 }
         )
     }
+
+    @Test
+    fun `Management API calls are deprecated with the reason`() {
+        val methods = (KindeClient::class.java.methods + KindeSDK::class.java.methods)
+            .filter { it.name == "getUsers" || it.name == "createUser" }
+
+        assertTrue(methods.size >= 4)
+        methods.forEach { m ->
+            val deprecated = m.getAnnotation(Deprecated::class.java)
+            assertTrue("${m.declaringClass.simpleName}.${m.name} is deprecated", deprecated != null)
+            assertTrue(deprecated!!.message.contains("machine-to-machine"))
+        }
+    }
+
+    @Test
+    @Suppress("DEPRECATION")
+    fun `calling a Management API method logs why once and still behaves as before`() {
+        installKindeMetaData(context)
+        val client = KindeClient.getInstance(context)
+        org.robolectric.shadows.ShadowLog.clear()
+
+        // Signed out, off the main thread: unchanged behaviour is a null result.
+        var users: Any? = "unset"
+        Thread { users = client.getUsers(); client.getUsers(); client.createUser() }.apply { start(); join() }
+
+        assertNull(users)
+        val warnings = org.robolectric.shadows.ShadowLog.getLogsForTag("KindeSDK").map { it.msg }.filter { it.contains("is deprecated") }
+        assertEquals("one warning per method", 2, warnings.size)
+        assertTrue(warnings.any { it.startsWith("getUsers()") && it.contains("backend") })
+        assertTrue(warnings.any { it.startsWith("createUser()") })
+    }
 }

@@ -76,6 +76,19 @@ activity-bound `KindeSDK`, constructed in `onCreate` as shown above. Creating a
 intended pattern — it is a thin facade, and all of them share the same
 `KindeClient` state underneath.
 
+## Management API
+
+`getUsers()` and `createUser()` are deprecated and will be removed in the next major
+version. They call Kinde's Management API, which only accepts machine-to-machine (M2M)
+tokens: Kinde refuses them with a signed-in user's token, and an M2M client secret must
+never be shipped in an app, where it can be extracted from the APK.
+
+- For the signed-in user, use `getUserDetails()`, `getUser()` or `getUserProfileV2()`.
+- For sign-up, use `register()`.
+- For anything else the Management API does (listing or creating users, admin
+  features), call your own backend, which checks the signed-in user's permissions and
+  then calls the Management API with its M2M credentials.
+
 ## Publishing
 
 The core team handles publishing.
