@@ -298,4 +298,29 @@ class KindeClientTest {
             awaitCondition { listener.logoutCount == 1 }
         )
     }
+
+    private fun key(kid: String) = au.kinde.sdk.keys.Key("AQAB", "modulus", "RS256", kid, "RSA")
+
+    @Test
+    fun `a token is verified with the key it names`() {
+        installKindeMetaData(context)
+        val keys = listOf(key("k1"), key("k2"))
+
+        assertEquals(listOf("k2"), KindeClient.getInstance(context).signingKeysFor("k2", keys).map { it.keyId })
+    }
+
+    @Test
+    fun `a token naming an unknown key has no candidates, which triggers a key refresh`() {
+        installKindeMetaData(context)
+
+        assertTrue(KindeClient.getInstance(context).signingKeysFor("k3", listOf(key("k1"), key("k2"))).isEmpty())
+    }
+
+    @Test
+    fun `a token without a key ID may be verified by any published key`() {
+        installKindeMetaData(context)
+        val keys = listOf(key("k1"), key("k2"))
+
+        assertEquals(keys, KindeClient.getInstance(context).signingKeysFor(null, keys))
+    }
 }
