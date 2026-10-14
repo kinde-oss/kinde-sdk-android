@@ -807,7 +807,9 @@ class KindeClient private constructor(
             }
             if (expectedAudience !in audiences) return "access token is not for audience '$expectedAudience'"
         }
-        val expired = !claims.has("exp") || nowMillis / 1000 > claims.getLong("exp") + EXPIRY_SKEW_SECONDS
+        // A missing, null or non-numeric exp can't prove the token is current.
+        val exp = (claims.opt("exp") as? Number)?.toLong()
+        val expired = exp == null || nowMillis / 1000 > exp + EXPIRY_SKEW_SECONDS
         if (expired && !canRefresh) return "access token has expired and there is no refresh token"
         return null
     }
