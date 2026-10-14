@@ -52,7 +52,22 @@ data class UserProfileV2 (
     val familyName: kotlin.String? = null,
 
     @SerializedName("updated_at")
-    val updatedAt: kotlin.String? = null
+    val updatedAt: kotlin.String? = null,
+
+    @SerializedName("sub")
+    val sub: kotlin.String? = null,
+
+    @SerializedName("email")
+    val email: kotlin.String? = null,
+
+    @SerializedName("email_verified")
+    val emailVerified: kotlin.Boolean? = null,
+
+    @SerializedName("picture")
+    val picture: kotlin.String? = null,
+
+    @SerializedName("preferred_username")
+    val preferredUsername: kotlin.String? = null
 
 )
 
