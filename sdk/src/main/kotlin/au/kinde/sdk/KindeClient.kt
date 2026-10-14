@@ -195,6 +195,20 @@ class KindeClient private constructor(
     @Volatile
     private var flagsCache: CacheEntry<Map<String, Flag>>? = null
 
+    // Declared before init, which starts the first key fetch.
+    // Signing key fetches: at most one in flight, refreshes of a non-empty cache at
+    // most once per KEYS_REFRESH_MIN_INTERVAL_MS, retries with backoff while a saved
+    // session is waiting for keys.
+    private val keysLock = Object()
+    @Volatile
+    private var keysFetchInFlight = false
+    @Volatile
+    private var lastKeysRefreshMs = 0L
+    @Volatile
+    private var keysRetryDelayMs = KEYS_RETRY_INITIAL_MS
+    private var keysRetryRunnable: Runnable? = null
+
+
     init {
         if (initialConfig != null) {
             // Programmatic configuration is authoritative for all three values:
@@ -257,6 +271,7 @@ class KindeClient private constructor(
             ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
                 override fun onStart(owner: LifecycleOwner) {
                     isPaused = false
+                    if (store.getKeys().isNullOrEmpty()) requestKeys(forceRefresh = false)
                     refreshState()
                     if (isAuthenticated()) {
                         scheduleTokenRefresh()
@@ -1271,35 +1286,54 @@ class KindeClient private constructor(
     private fun checkToken() = checkTokenWithState(state)
 
     private fun checkTokenWithState(authState: AuthState): Boolean {
-        if (authState.isAuthorized) {
-            store.getKeys()?.let { keysString ->
-                try {
-                    gson.fromJson(keysString, Keys::class.java)?.let { keys ->
-                        keys.keys.firstOrNull()?.let { key ->
-                            val jwt = authState.accessToken.orEmpty()
-
-                            val exponentB: ByteArray = decode(key.exponent, URL_SAFE)
-                            val modulusB: ByteArray = decode(key.modulus, URL_SAFE)
-                            val bigExponent = BigInteger(1, exponentB)
-                            val bigModulus = BigInteger(1, modulusB)
-                            val publicKey = KeyFactory.getInstance(key.keyType)
-                                .generatePublic(RSAPublicKeySpec(bigModulus, bigExponent))
-                            val signedData: String = jwt.substring(0, jwt.lastIndexOf("."))
-                            val signatureB64u: String =
-                                jwt.substring(jwt.lastIndexOf(".") + 1, jwt.length)
-                            val signature: ByteArray = decode(signatureB64u, URL_SAFE)
-                            val sig: Signature = Signature.getInstance("SHA256withRSA")
-                            sig.initVerify(publicKey)
-                            sig.update(signedData.toByteArray())
-                            return sig.verify(signature)
-                        }
-                    }
-                } catch (ex: Exception) {
-                    notifyException(ex)
-                }
+        if (!authState.isAuthorized) return false
+        val keysString = store.getKeys() ?: return false
+        val jwt = authState.accessToken.orEmpty()
+        return try {
+            val keys = gson.fromJson(keysString, Keys::class.java)?.keys.orEmpty()
+            val kid = tokenKeyId(jwt)
+            val candidates = signingKeysFor(kid, keys)
+            if (candidates.isEmpty()) {
+                // The token names a key we don't have: Kinde has most likely rotated its
+                // keys since they were cached. Fetch the current set; when it arrives the
+                // session is re-checked and listeners hear about it.
+                android.util.Log.w("KindeSDK", "Access token is signed with an unknown key ($kid); refreshing signing keys")
+                requestKeys(forceRefresh = true)
+                false
+            } else {
+                candidates.any { verifySignature(jwt, it) }
             }
+        } catch (ex: Exception) {
+            notifyException(ex)
+            false
         }
-        return false
+    }
+
+    /** The key ID in a JWT's header, or null when it has none. */
+    private fun tokenKeyId(jwt: String): String? = runCatching {
+        val header = org.json.JSONObject(String(decode(jwt.substringBefore('.'), URL_SAFE), Charsets.UTF_8))
+        header.optString("kid").takeIf { it.isNotBlank() }
+    }.getOrNull()
+
+    /**
+     * The cached keys that may have signed a token: the one matching its key ID, or
+     * every key when the token names none. Empty when the named key isn't cached.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun signingKeysFor(kid: String?, keys: List<au.kinde.sdk.keys.Key>): List<au.kinde.sdk.keys.Key> =
+        if (kid == null) keys else keys.filter { it.keyId == kid }
+
+    private fun verifySignature(jwt: String, key: au.kinde.sdk.keys.Key): Boolean {
+        val bigExponent = BigInteger(1, decode(key.exponent, URL_SAFE))
+        val bigModulus = BigInteger(1, decode(key.modulus, URL_SAFE))
+        val publicKey = KeyFactory.getInstance(key.keyType).generatePublic(RSAPublicKeySpec(bigModulus, bigExponent))
+        val signedData = jwt.substring(0, jwt.lastIndexOf("."))
+        val signature = decode(jwt.substring(jwt.lastIndexOf(".") + 1), URL_SAFE)
+        return Signature.getInstance("SHA256withRSA").run {
+            initVerify(publicKey)
+            update(signedData.toByteArray())
+            verify(signature)
+        }
     }
 
     private fun <T> callApi(call: Call<T>, refreshed: Boolean = false): T? {
@@ -1471,33 +1505,64 @@ class KindeClient private constructor(
      * This should be called when setting up the SDK or when switching domains.
      */
     private fun initializeStoreData() {
-        // Capture store reference to prevent race condition if domain switches during async request
-        val storeForRequest = store
-
-        // Fetch and store keys for the domain if not already present
-        if (storeForRequest.getKeys().isNullOrEmpty()) {
-            keysApi.getKeys().enqueue(object : Callback<Keys> {
-                override fun onResponse(call: Call<Keys>, response: Response<Keys>) {
-                    response.body()?.let { keys ->
-                        // Use captured store reference to ensure keys are saved to correct store
-                        storeForRequest.saveKeys(gson.toJson(keys))
-                        // Only set up auth state if this store is still the current one
-                        if (store == storeForRequest) {
-                            setupAuthState()
-                        }
-                    }
-                }
-
-                override fun onFailure(call: Call<Keys>, t: Throwable) {
-                    notifyException(Exception(t))
-                    // Don't proceed with auth setup if keys fetch failed
-                }
-            })
+        if (store.getKeys().isNullOrEmpty()) {
+            requestKeys(forceRefresh = false)
         } else {
-            // Keys already exist, set up auth state immediately
-            // Only set up if store hasn't changed
-            if (store == storeForRequest) {
-                setupAuthState()
+            setupAuthState()
+        }
+    }
+
+    /**
+     * Fetches the JWKS unless a fetch is already running. [forceRefresh] replaces a
+     * non-empty cache (an unknown key ID was seen), throttled so a bad token can't
+     * make the SDK hammer Kinde.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun requestKeys(forceRefresh: Boolean) {
+        val storeForRequest = store
+        synchronized(keysLock) {
+            if (keysFetchInFlight) return
+            val now = System.currentTimeMillis()
+            if (forceRefresh && now - lastKeysRefreshMs < KEYS_REFRESH_MIN_INTERVAL_MS) return
+            if (!forceRefresh && !storeForRequest.getKeys().isNullOrEmpty()) return
+            if (forceRefresh) lastKeysRefreshMs = now
+            keysFetchInFlight = true
+        }
+        keysApi.getKeys().enqueue(object : Callback<Keys> {
+            override fun onResponse(call: Call<Keys>, response: Response<Keys>) {
+                val keys = response.body()
+                synchronized(keysLock) { keysFetchInFlight = false }
+                if (response.isSuccessful && keys != null && keys.keys.isNotEmpty()) {
+                    keysRetryDelayMs = KEYS_RETRY_INITIAL_MS
+                    // Use captured store reference to ensure keys are saved to correct store
+                    storeForRequest.saveKeys(gson.toJson(keys))
+                    // Only set up auth state if this store is still the current one
+                    if (store == storeForRequest) setupAuthState()
+                } else {
+                    keysUnavailable(storeForRequest, Exception("Could not fetch signing keys: HTTP ${response.code()}"))
+                }
+            }
+
+            override fun onFailure(call: Call<Keys>, t: Throwable) {
+                synchronized(keysLock) { keysFetchInFlight = false }
+                keysUnavailable(storeForRequest, Exception(t))
+            }
+        })
+    }
+
+    /** Reports a failed key fetch, and retries later when a saved session is waiting for keys. */
+    private fun keysUnavailable(storeForRequest: Store, error: Exception) {
+        notifyException(error)
+        if (store != storeForRequest) return
+        val waiting = !storeForRequest.getState().isNullOrEmpty() && storeForRequest.getKeys().isNullOrEmpty()
+        if (!waiting) return
+        val delay = keysRetryDelayMs
+        keysRetryDelayMs = minOf(keysRetryDelayMs * 2, KEYS_RETRY_MAX_MS)
+        runOnMainThread {
+            keysRetryRunnable?.let { tokenRefreshHandler.removeCallbacks(it) }
+            if (isPaused) return@runOnMainThread // retried on the next onStart instead
+            keysRetryRunnable = Runnable { requestKeys(forceRefresh = false) }.also {
+                tokenRefreshHandler.postDelayed(it, delay)
             }
         }
     }
@@ -1665,5 +1730,8 @@ class KindeClient private constructor(
         // Cache configuration
         private const val CACHE_TTL_MS = 60_000L // 60 seconds
         private const val TOKEN_REFRESH_BUFFER_MS = 10_000L // 10 seconds
+        private const val KEYS_REFRESH_MIN_INTERVAL_MS = 60_000L // unknown-kid refreshes
+        private const val KEYS_RETRY_INITIAL_MS = 10_000L
+        private const val KEYS_RETRY_MAX_MS = 5 * 60_000L
     }
 }
