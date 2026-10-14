@@ -608,6 +608,11 @@ class KindeClient private constructor(
     /** Clears the local session; the terminal step of a successful logout. */
     private fun completeLogoutLocally() {
         val storeToClean = store
+        // Captured before the overrides are cleared: the token belongs to the
+        // domain and client that issued it.
+        val refreshToken = synchronized(stateLock) { state.refreshToken }
+        val repository = tokenRepository
+        val clientId = runtimeClientId ?: configClientId
         clearRuntimeOverrides()
 
         synchronized(stateLock) {
@@ -615,6 +620,16 @@ class KindeClient private constructor(
             storeToClean.clearState()
             state = AuthState(getServiceConfiguration(configDomain))
             isLoggingOut = false
+        }
+
+        // The end-session page ends the browser session only; revoke the refresh
+        // token too so a copy of it can't mint new tokens after logout.
+        if (!refreshToken.isNullOrEmpty()) {
+            thread {
+                if (!repository.revokeRefreshToken(refreshToken, clientId)) {
+                    android.util.Log.w("KindeSDK", "Refresh token revocation failed; the session is cleared locally")
+                }
+            }
         }
 
         notifyLogout()
