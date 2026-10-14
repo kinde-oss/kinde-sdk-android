@@ -1,3 +1,10 @@
 {
-  "extends": ["config:recommended"]
+  "extends": ["config:recommended"],
+  "packageRules": [
+    {
+      "description": "lifecycle 2.11+ pulls apps' lifecycle-runtime-compose to a version that requires compileSdk 37. Hold at 2.10.x until the SDK is ready to require compileSdk 37 of every app.",
+      "matchPackageNames": ["androidx.lifecycle:**"],
+      "allowedVersions": "<2.11.0"
+    }
+  ]
 }

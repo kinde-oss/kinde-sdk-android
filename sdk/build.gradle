@@ -49,7 +49,10 @@ android {
 
 dependencies {
     implementation 'androidx.appcompat:appcompat:1.8.0'
-    implementation 'androidx.lifecycle:lifecycle-process:2.11.0'
+    // Keep lifecycle below 2.11: lifecycle artifacts pin their siblings to the same
+    // version, so 2.11 would drag an app's lifecycle-runtime-compose (part of every
+    // Compose app) to 2.11, which requires compileSdk 37. 2.10 needs at most 35.
+    implementation 'androidx.lifecycle:lifecycle-process:2.10.0'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.robolectric:robolectric:4.17'
     testImplementation 'androidx.test:core:1.7.0'
