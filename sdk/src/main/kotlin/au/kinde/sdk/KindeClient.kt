@@ -746,7 +746,12 @@ class KindeClient private constructor(
     }
 
     /**
-     * Checks if the user is currently authenticated.
+     * Checks if the user has a usable session: the stored access token is signed by
+     * Kinde, was issued by this domain (and for the configured audience, if any),
+     * and is either unexpired or renewable with a refresh token. An expired token
+     * with a refresh token still counts: the SDK renews it, for example when the
+     * app returns to the foreground.
+     *
      * This method relies on shared preferences rather than in-memory state.
      */
     fun isAuthenticated(): Boolean {
@@ -755,8 +760,58 @@ class KindeClient private constructor(
             if (stateJson.isNullOrBlank()) return false
             // Temporarily deserialize to check auth status without mutating instance state
             val currentState = AuthState.jsonDeserialize(stateJson)
-            return currentState.isAuthorized && checkTokenWithState(currentState)
+            if (!currentState.isAuthorized || !checkTokenWithState(currentState)) return false
+            val problem = accessTokenProblem(
+                accessToken = currentState.accessToken.orEmpty(),
+                expectedIssuer = HTTPS.format(runtimeDomain ?: configDomain),
+                expectedAudience = audience,
+                canRefresh = !currentState.refreshToken.isNullOrBlank(),
+                nowMillis = System.currentTimeMillis()
+            )
+            if (problem != null) {
+                android.util.Log.w("KindeSDK", "Session is not usable: $problem")
+                return false
+            }
+            return true
         }
+    }
+
+    /**
+     * Why the access token can't back a session, or null when it can. The
+     * signature is checked separately (checkTokenWithState).
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun accessTokenProblem(
+        accessToken: String,
+        expectedIssuer: String,
+        expectedAudience: String?,
+        canRefresh: Boolean,
+        nowMillis: Long
+    ): String? {
+        val claims = try {
+            org.json.JSONObject(
+                String(decode(accessToken.split('.')[1], URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP), Charsets.UTF_8)
+            )
+        } catch (e: Exception) {
+            return "access token payload is not readable"
+        }
+        val issuer = claims.optString("iss")
+        if (issuer.trimEnd('/') != expectedIssuer.trimEnd('/')) {
+            return "access token issuer '$issuer' does not match '${expectedIssuer.trimEnd('/')}'"
+        }
+        if (expectedAudience != null) {
+            val audiences = when (val aud = claims.opt("aud")) {
+                is String -> listOf(aud)
+                is org.json.JSONArray -> (0 until aud.length()).map { aud.optString(it) }
+                else -> emptyList()
+            }
+            if (expectedAudience !in audiences) return "access token is not for audience '$expectedAudience'"
+        }
+        // A missing, null or non-numeric exp can't prove the token is current.
+        val exp = (claims.opt("exp") as? Number)?.toLong()
+        val expired = exp == null || nowMillis / 1000 > exp + EXPIRY_SKEW_SECONDS
+        if (expired && !canRefresh) return "access token has expired and there is no refresh token"
+        return null
     }
 
     /**
@@ -1665,5 +1720,6 @@ class KindeClient private constructor(
         // Cache configuration
         private const val CACHE_TTL_MS = 60_000L // 60 seconds
         private const val TOKEN_REFRESH_BUFFER_MS = 10_000L // 10 seconds
+        private const val EXPIRY_SKEW_SECONDS = 60L // allowance for device clock drift
     }
 }

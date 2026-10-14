@@ -298,4 +298,157 @@ class KindeClientTest {
             awaitCondition { listener.logoutCount == 1 }
         )
     }
+
+    private fun accessToken(vararg claims: Pair<String, Any?>): String {
+        val now = System.currentTimeMillis() / 1000
+        val base = mutableMapOf<String, Any?>("iss" to "https://$TEST_DOMAIN", "exp" to now + 3600, "aud" to org.json.JSONArray())
+        claims.forEach { (k, v) -> if (v == null) base.remove(k) else base[k] = v }
+        val enc = java.util.Base64.getUrlEncoder().withoutPadding()
+        return enc.encodeToString("""{"alg":"RS256"}""".toByteArray()) + "." +
+            enc.encodeToString(org.json.JSONObject(base).toString().toByteArray()) + ".sig"
+    }
+
+    private fun problem(token: String, canRefresh: Boolean = false, audience: String? = null) =
+        KindeClient.getInstance(context).accessTokenProblem(token, "https://$TEST_DOMAIN/", audience, canRefresh, System.currentTimeMillis())
+
+    @Test
+    fun `an unexpired token from this domain backs a session`() {
+        installKindeMetaData(context)
+
+        assertNull(problem(accessToken()))
+    }
+
+    @Test
+    fun `an expired token without a refresh token does not`() {
+        installKindeMetaData(context)
+        val now = System.currentTimeMillis() / 1000
+
+        assertTrue(problem(accessToken("exp" to now - 3600))!!.contains("expired"))
+        assertTrue("missing exp counts as expired", problem(accessToken("exp" to null))!!.contains("expired"))
+    }
+
+    @Test
+    fun `an expired token with a refresh token still does, since the SDK renews it`() {
+        installKindeMetaData(context)
+        val now = System.currentTimeMillis() / 1000
+
+        assertNull(problem(accessToken("exp" to now - 3600), canRefresh = true))
+    }
+
+    @Test
+    fun `a token from another issuer does not`() {
+        installKindeMetaData(context)
+
+        assertTrue(problem(accessToken("iss" to "https://evil.example.com"), canRefresh = true)!!.contains("issuer"))
+    }
+
+    @Test
+    fun `with an audience configured, the token must be for it`() {
+        installKindeMetaData(context)
+
+        assertTrue(problem(accessToken(), audience = "https://api.example.com")!!.contains("audience"))
+        assertNull(problem(accessToken("aud" to org.json.JSONArray(listOf("https://api.example.com"))), audience = "https://api.example.com"))
+    }
+
+    @Test
+    fun `clock drift of up to a minute is tolerated`() {
+        installKindeMetaData(context)
+        val now = System.currentTimeMillis() / 1000
+
+        assertNull(problem(accessToken("exp" to now - 30)))
+    }
+
+    @Test
+    fun `a null or non-numeric exp counts as expired instead of throwing`() {
+        installKindeMetaData(context)
+
+        assertTrue(problem(accessToken("exp" to org.json.JSONObject.NULL))!!.contains("expired"))
+        assertTrue(problem(accessToken("exp" to "tomorrow"))!!.contains("expired"))
+        assertNull("still renewable", problem(accessToken("exp" to "tomorrow"), canRefresh = true))
+    }
+
+    // -- isAuthenticated() end to end: real signature, stored session ----------------------
+
+    private val signingKey: java.security.KeyPair by lazy {
+        java.security.KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+    }
+
+    private fun signed(vararg claims: Pair<String, Any?>, issuerDomain: String = TEST_DOMAIN): String {
+        val now = System.currentTimeMillis() / 1000
+        val base = mutableMapOf<String, Any?>("iss" to "https://$issuerDomain", "exp" to now + 3600, "aud" to org.json.JSONArray())
+        claims.forEach { (k, v) -> if (v == null) base.remove(k) else base[k] = v }
+        val enc = java.util.Base64.getUrlEncoder().withoutPadding()
+        val input = enc.encodeToString("""{"alg":"RS256","kid":"k1"}""".toByteArray()) + "." +
+            enc.encodeToString(org.json.JSONObject(base).toString().toByteArray())
+        val sig = java.security.Signature.getInstance("SHA256withRSA").apply { initSign(signingKey.private); update(input.toByteArray()) }.sign()
+        return input + "." + enc.encodeToString(sig)
+    }
+
+    /** Stores a session and the JWKS that verifies it, the way the SDK persists them, for [domain]. */
+    private fun storeSession(accessToken: String, refreshToken: String?, domain: String = TEST_DOMAIN) {
+        val enc = java.util.Base64.getUrlEncoder().withoutPadding()
+        fun b64(i: java.math.BigInteger) = enc.encodeToString(i.toByteArray().let { if (it[0] == 0.toByte()) it.copyOfRange(1, it.size) else it })
+        val pub = signingKey.public as java.security.interfaces.RSAPublicKey
+        val keys = """{"keys":[{"e":"${b64(pub.publicExponent)}","n":"${b64(pub.modulus)}","alg":"RS256","kid":"k1","kty":"RSA"}]}"""
+        val config = net.openid.appauth.AuthorizationServiceConfiguration(
+            android.net.Uri.parse("https://$domain/oauth2/auth"), android.net.Uri.parse("https://$domain/oauth2/token")
+        )
+        val request = net.openid.appauth.AuthorizationRequest.Builder(config, TEST_CLIENT_ID, "code", android.net.Uri.parse("test.scheme://callback")).build()
+        val response = net.openid.appauth.AuthorizationResponse.Builder(request).setAuthorizationCode("c").setState(request.state).build()
+        val state = net.openid.appauth.AuthState(response, null)
+        state.update(
+            net.openid.appauth.TokenResponse.Builder(response.createTokenExchangeRequest())
+                .setTokenType("Bearer").setAccessToken(accessToken).setRefreshToken(refreshToken).build(),
+            null
+        )
+        val store = au.kinde.sdk.store.Store(context, domain)
+        store.saveKeys(keys)
+        store.saveState(state.jsonSerializeString())
+    }
+
+    @Test
+    fun `isAuthenticated accepts a valid signed session`() {
+        installKindeMetaData(context)
+        storeSession(signed(), refreshToken = null)
+
+        assertTrue(KindeClient.getInstance(context).isAuthenticated())
+    }
+
+    @Test
+    fun `isAuthenticated rejects an expired session that can't be renewed, and keeps a renewable one`() {
+        installKindeMetaData(context)
+        val now = System.currentTimeMillis() / 1000
+        val expired = signed("exp" to now - 3600)
+
+        storeSession(expired, refreshToken = null)
+        assertFalse(KindeClient.getInstance(context).isAuthenticated())
+
+        storeSession(expired, refreshToken = "rt_1")
+        assertTrue(KindeClient.getInstance(context).isAuthenticated())
+    }
+
+    @Test
+    fun `isAuthenticated rejects a validly signed token from another issuer`() {
+        installKindeMetaData(context)
+        storeSession(signed(issuerDomain = "evil.example.com"), refreshToken = "rt_1")
+
+        assertFalse(KindeClient.getInstance(context).isAuthenticated())
+    }
+
+    @Test
+    fun `isAuthenticated checks the issuer against a per-login domain override`() {
+        installKindeMetaData(context)
+        val client = KindeClient.getInstance(context)
+        // A login with a domain override switches the client to that domain (and its
+        // store) before the browser opens; Robolectric has no browser, so it stops there.
+        runCatching {
+            client.login(null, null, null, TEST_DOMAIN_US, null, null, null, "test.scheme://callback", listOf("openid")) {}
+        }
+
+        storeSession(signed(issuerDomain = TEST_DOMAIN_US), refreshToken = null, domain = TEST_DOMAIN_US)
+        assertTrue("issued by the override domain", client.isAuthenticated())
+
+        storeSession(signed(issuerDomain = TEST_DOMAIN), refreshToken = null, domain = TEST_DOMAIN_US)
+        assertFalse("issued by the configured domain, not the one in use", client.isAuthenticated())
+    }
 }
