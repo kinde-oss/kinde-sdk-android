@@ -1206,7 +1206,10 @@ class KindeClient private constructor(
                     store.saveState(state.jsonSerializeString())
                     lastTokenUpdateTime = System.currentTimeMillis()
 
-                    if (notifyListener && !state.accessToken.isNullOrEmpty()) {
+                    // Every successful exchange or refresh changes the token apps use, so
+                    // listeners always hear about it. notifyListener only decides what a
+                    // failure does (see below).
+                    if (!state.accessToken.isNullOrEmpty()) {
                         shouldNotify = true
                         snapshotToken = state.accessToken.orEmpty()
                     }
