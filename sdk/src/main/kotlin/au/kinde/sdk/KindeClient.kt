@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
+import androidx.annotation.WorkerThread
 import android.util.Base64.URL_SAFE
 import android.util.Base64.decode
 import androidx.core.net.toUri
@@ -78,6 +79,15 @@ import kotlin.concurrent.thread
  *
  * Login, registration and logout open a browser tab and therefore still require
  * an activity-bound [KindeSDK].
+ *
+ * Threading: methods that call Kinde over the network ([getUser], [getUserProfileV2],
+ * [getEntitlements], [getEntitlement], [refreshToken], and the permission, role and flag
+ * methods with `ApiOptions(forceApi = true)`) block, so call them off the main thread. On
+ * the main thread they make no request: they return null (false for [refreshToken]) and
+ * report [WrongThreadException] to [SDKListener.onException]; the forceApi variants throw.
+ * Methods that read the tokens ([getToken], [isAuthenticated], the claim, permission, role
+ * and flag methods without forceApi) are safe on any thread. [SDKListener] callbacks can
+ * arrive on any thread; see its documentation.
  */
 class KindeClient private constructor(
     private val appContext: Context,
@@ -784,7 +794,49 @@ class KindeClient private constructor(
 
     fun getEntitlement(key: String): EntitlementResponse? = callApi(oAuthApi.getEntitlement(key))
 
-    fun getEntitlements(): EntitlementsResponse? = callApi(oAuthApi.getEntitlements())
+    /**
+     * One page of the user's entitlements. For the next page pass
+     * `metadata.nextPageStartingAfter` as [startingAfter] while `metadata.hasMore` is true.
+     *
+     * @param pageSize Entitlements per page; Kinde's default when null.
+     * @param startingAfter Cursor from the previous page's metadata; null for the first page.
+     */
+    @JvmOverloads
+    fun getEntitlements(pageSize: Int? = null, startingAfter: String? = null): EntitlementsResponse? =
+        callApi(oAuthApi.getEntitlements(pageSize, startingAfter))
+
+    /**
+     * Refreshes the access token now, with the refresh token.
+     *
+     * The SDK already refreshes on a schedule while the app is in the foreground (the
+     * schedule pauses in the background) and when Kinde rejects an API call. Call this
+     * when you need a fresh token before that, for example in a background job that runs
+     * after the token expired, before sending it to your own API.
+     *
+     * Blocking network call: call it off the main thread. On the main thread it returns
+     * false and reports [WrongThreadException] to [SDKListener.onException].
+     *
+     * @return true when Kinde issued a new access token; listeners also get
+     * [SDKListener.onNewToken]. False when there is no session, a logout is in progress or
+     * the request failed (reported to onException). A refresh token Kinde rejects signs the
+     * user out, as for a scheduled refresh.
+     */
+    @WorkerThread
+    fun refreshToken(): Boolean {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            notifyException(WrongThreadException)
+            return false
+        }
+        val request = synchronized(stateLock) {
+            if (isLoggingOut || state.refreshToken.isNullOrEmpty()) return false
+            try {
+                state.createTokenRefreshRequest()
+            } catch (e: IllegalStateException) {
+                return false
+            }
+        }
+        return getToken(request, notifyListener = false)
+    }
 
     fun createUser(createUserRequest: CreateUserRequest? = null): CreateUser200Response? =
         callApi(usersApi.createUser(createUserRequest))
@@ -1206,16 +1258,15 @@ class KindeClient private constructor(
                     store.saveState(state.jsonSerializeString())
                     lastTokenUpdateTime = System.currentTimeMillis()
 
-                    if (notifyListener && !state.accessToken.isNullOrEmpty()) {
+                    // Every successful exchange or refresh changes the token apps use, so
+                    // listeners always hear about it. notifyListener only decides what a
+                    // failure does (see below).
+                    if (!state.accessToken.isNullOrEmpty()) {
                         shouldNotify = true
                         snapshotToken = state.accessToken.orEmpty()
                     }
                 }
             }
-            if (shouldNotify) {
-                notifyNewToken(snapshotToken)
-            }
-
             if (grantType != "refresh_token") {
                 // Reset invitation handling flag after successful interactive authentication
                 invitationState.completeHandling()
@@ -1235,7 +1286,15 @@ class KindeClient private constructor(
                 return false
             }
 
-            scheduleTokenRefresh()
+            // Listeners are app code: call them only once the refresh state is released,
+            // and keep the schedule going even if one throws.
+            try {
+                if (shouldNotify) {
+                    notifyNewToken(snapshotToken)
+                }
+            } finally {
+                scheduleTokenRefresh()
+            }
         } else {
             // Check if this is a 401/invalid_grant error (invalid refresh token)
             val isInvalidRefreshToken = ex?.let { exception ->

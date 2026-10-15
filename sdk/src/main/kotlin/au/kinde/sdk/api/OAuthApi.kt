@@ -20,5 +20,8 @@ interface OAuthApi {
     fun getEntitlement(@Query("key") key: String): Call<EntitlementResponse>
 
     @GET("account_api/v1/entitlements")
-    fun getEntitlements(): Call<EntitlementsResponse>
+    fun getEntitlements(
+        @Query("page_size") pageSize: Int? = null,
+        @Query("starting_after") startingAfter: String? = null
+    ): Call<EntitlementsResponse>
 }
