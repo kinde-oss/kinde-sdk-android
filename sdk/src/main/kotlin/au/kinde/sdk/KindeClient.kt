@@ -48,6 +48,7 @@ import net.openid.appauth.AuthorizationService
 import net.openid.appauth.AuthorizationServiceConfiguration
 import net.openid.appauth.CodeVerifierUtil
 import net.openid.appauth.EndSessionRequest
+import org.json.JSONArray
 import org.json.JSONObject
 import net.openid.appauth.ResponseTypeValues
 import net.openid.appauth.TokenRequest
@@ -138,6 +139,13 @@ class KindeClient private constructor(
     private var lastTokenUpdateTime = 0L
     private val stateLock = Object()
     private val refreshLock = Object()
+
+    // Pending revocations: every change to a store's list happens under
+    // revocationLock (never during a network call), and one worker sends them.
+    private val revocationLock = Any()
+    private val revocationJobs = LinkedHashMap<Store, TokenRepository>()
+    private var revocationWorkerRunning = false
+
     private val domainSwitchLock = Object()
 
     @Volatile
@@ -620,9 +628,7 @@ class KindeClient private constructor(
         // Recorded before the session is deleted, so a revocation cut short by the
         // process ending is retried on the next launch.
         if (!refreshToken.isNullOrEmpty()) {
-            storeToClean.savePendingRevocation(
-                JSONObject().put(REVOKE_TOKEN, refreshToken).put(REVOKE_CLIENT_ID, clientId).toString()
-            )
+            addPendingRevocation(storeToClean, refreshToken, clientId)
         }
         clearRuntimeOverrides()
 
@@ -636,7 +642,7 @@ class KindeClient private constructor(
         // The end-session page ends the browser session only; revoke the refresh
         // token too so a copy of it can't mint new tokens after logout.
         if (!refreshToken.isNullOrEmpty()) {
-            thread { revokePending(storeToClean, repository) }
+            revokePending(storeToClean, repository)
         }
 
         notifyLogout()
@@ -1492,26 +1498,78 @@ class KindeClient private constructor(
      * Initializes domain-specific data including keys and authentication state.
      * This should be called when setting up the SDK or when switching domains.
      */
-    /**
-     * Sends the revocation recorded by logout, if any, and forgets it once Kinde has
-     * answered for good. Network failures and server errors keep it for the next launch.
-     */
-    private fun revokePending(storeWithRecord: Store, repository: TokenRepository) {
-        val record = storeWithRecord.getPendingRevocation()?.let { runCatching { JSONObject(it) }.getOrNull() }
-        val token = record?.optString(REVOKE_TOKEN).orEmpty()
-        val clientId = record?.optString(REVOKE_CLIENT_ID).orEmpty()
-        if (token.isEmpty() || clientId.isEmpty()) {
-            storeWithRecord.clearPendingRevocation()
-            return
+    private fun pendingRevocations(store: Store): MutableList<JSONObject> {
+        val raw = store.getPendingRevocations()?.trim() ?: return mutableListOf()
+        return try {
+            val array = JSONArray(raw)
+            (0 until array.length()).mapNotNull { array.optJSONObject(it) }.toMutableList()
+        } catch (e: Exception) {
+            mutableListOf()
         }
-        when (repository.revokeRefreshToken(token, clientId)) {
-            TokenRepository.Revocation.REVOKED -> storeWithRecord.clearPendingRevocation()
-            TokenRepository.Revocation.REJECTED -> {
-                android.util.Log.w("KindeSDK", "Kinde refused to revoke the logged-out refresh token")
-                storeWithRecord.clearPendingRevocation()
+    }
+
+    private fun savePendingRevocations(store: Store, records: List<JSONObject>) {
+        store.savePendingRevocations(if (records.isEmpty()) null else JSONArray(records).toString())
+    }
+
+    private fun addPendingRevocation(store: Store, token: String, clientId: String) {
+        synchronized(revocationLock) {
+            val records = pendingRevocations(store)
+            if (records.none { it.optString(REVOKE_TOKEN) == token }) {
+                records += JSONObject().put(REVOKE_TOKEN, token).put(REVOKE_CLIENT_ID, clientId)
+                savePendingRevocations(store, records)
             }
-            TokenRepository.Revocation.FAILED ->
-                android.util.Log.w("KindeSDK", "Refresh token revocation failed; retrying on the next launch")
+        }
+    }
+
+    private fun removePendingRevocation(store: Store, token: String) {
+        synchronized(revocationLock) {
+            savePendingRevocations(store, pendingRevocations(store).filter { it.optString(REVOKE_TOKEN) != token })
+        }
+    }
+
+    /**
+     * Sends the revocations recorded by logout. One worker at a time: a request made
+     * while it runs is picked up when it finishes, so a record added meanwhile is
+     * never skipped. A record is removed only once Kinde has answered for its token;
+     * network failures and server errors keep it for the next launch.
+     */
+    private fun revokePending(store: Store, repository: TokenRepository) {
+        synchronized(revocationLock) {
+            revocationJobs[store] = repository
+            if (revocationWorkerRunning) return
+            revocationWorkerRunning = true
+        }
+        thread {
+            while (true) {
+                val (jobStore, jobRepository) = synchronized(revocationLock) {
+                    val next = revocationJobs.entries.firstOrNull()
+                    if (next == null) {
+                        revocationWorkerRunning = false
+                        return@thread
+                    }
+                    revocationJobs.remove(next.key)
+                    next.key to next.value
+                }
+                val records = synchronized(revocationLock) { pendingRevocations(jobStore) }
+                for (record in records) {
+                    val token = record.optString(REVOKE_TOKEN)
+                    val clientId = record.optString(REVOKE_CLIENT_ID)
+                    if (token.isEmpty() || clientId.isEmpty()) {
+                        removePendingRevocation(jobStore, token)
+                        continue
+                    }
+                    when (jobRepository.revokeRefreshToken(token, clientId)) {
+                        TokenRepository.Revocation.REVOKED -> removePendingRevocation(jobStore, token)
+                        TokenRepository.Revocation.REJECTED -> {
+                            android.util.Log.w("KindeSDK", "Kinde refused to revoke a logged-out refresh token")
+                            removePendingRevocation(jobStore, token)
+                        }
+                        TokenRepository.Revocation.FAILED ->
+                            android.util.Log.w("KindeSDK", "Refresh token revocation failed; retrying on the next launch")
+                    }
+                }
+            }
         }
     }
 
@@ -1520,9 +1578,8 @@ class KindeClient private constructor(
         val storeForRequest = store
 
         // A logout whose revocation didn't get through: try again.
-        if (storeForRequest.getPendingRevocation() != null) {
-            val repository = tokenRepository
-            thread { revokePending(storeForRequest, repository) }
+        if (storeForRequest.getPendingRevocations() != null) {
+            revokePending(storeForRequest, tokenRepository)
         }
 
         // Fetch and store keys for the domain if not already present

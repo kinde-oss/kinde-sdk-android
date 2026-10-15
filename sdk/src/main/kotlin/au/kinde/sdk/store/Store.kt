@@ -51,16 +51,17 @@ class Store(context: Context, private val key: String) {
 
     fun getKeys(): String? = retrieve(KEYS_PREF)
 
-    /** A refresh token logout still has to revoke, kept until Kinde accepts the revocation. */
-    fun savePendingRevocation(record: String) {
-        authPrefs.edit().putString(PENDING_REVOCATION_PREF, encryptMsg(record)).commit()
+    /**
+     * Refresh tokens logout still has to revoke (a JSON array), kept until Kinde has
+     * answered for each. Written synchronously so the record survives the process.
+     */
+    fun savePendingRevocations(records: String?) {
+        authPrefs.edit().apply {
+            if (records == null) remove(PENDING_REVOCATION_PREF) else putString(PENDING_REVOCATION_PREF, encryptMsg(records))
+        }.commit()
     }
 
-    fun getPendingRevocation(): String? = retrieve(PENDING_REVOCATION_PREF)
-
-    fun clearPendingRevocation() {
-        authPrefs.edit().remove(PENDING_REVOCATION_PREF).apply()
-    }
+    fun getPendingRevocations(): String? = retrieve(PENDING_REVOCATION_PREF)
 
     private fun store(dataKey: String, data: String) {
         authPrefs.edit().putString(dataKey, encryptMsg(data)).apply()
