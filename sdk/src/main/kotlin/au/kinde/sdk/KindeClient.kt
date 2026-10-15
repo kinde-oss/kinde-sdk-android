@@ -1215,10 +1215,6 @@ class KindeClient private constructor(
                     }
                 }
             }
-            if (shouldNotify) {
-                notifyNewToken(snapshotToken)
-            }
-
             if (grantType != "refresh_token") {
                 // Reset invitation handling flag after successful interactive authentication
                 invitationState.completeHandling()
@@ -1238,7 +1234,15 @@ class KindeClient private constructor(
                 return false
             }
 
-            scheduleTokenRefresh()
+            // Listeners are app code: call them only once the refresh state is released,
+            // and keep the schedule going even if one throws.
+            try {
+                if (shouldNotify) {
+                    notifyNewToken(snapshotToken)
+                }
+            } finally {
+                scheduleTokenRefresh()
+            }
         } else {
             // Check if this is a 401/invalid_grant error (invalid refresh token)
             val isInvalidRefreshToken = ex?.let { exception ->

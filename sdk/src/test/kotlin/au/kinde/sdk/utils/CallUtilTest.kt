@@ -34,6 +34,14 @@ class CallUtilTest {
     }
 
     @Test
+    fun `TOKEN_ERROR counts only as the error code`() {
+        assertTrue(isRejectedToken(400, """{"code":"TOKEN_ERROR","message":"Invalid token"}""", valid, now))
+        assertTrue(isRejectedToken(400, """{"errors":[{"code":"TOKEN_ERROR"}]}""", valid, now))
+        assertFalse(isRejectedToken(400, """[{"Code":"INVALID_KEY","Message":"TOKEN_ERROR is not a valid key"}]""", valid, now))
+        assertFalse(isRejectedToken(400, "TOKEN_ERROR", valid, now))
+    }
+
+    @Test
     fun `a 403 from the profile endpoint with an expired token is a rejected token`() {
         assertTrue(isRejectedToken(403, "", expired, now))
     }

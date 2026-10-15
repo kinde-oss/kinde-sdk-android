@@ -5,6 +5,8 @@ import au.kinde.sdk.NotAuthorizedException
 import au.kinde.sdk.TokenExpiredException
 import au.kinde.sdk.WrongThreadException
 import net.openid.appauth.AuthState
+import org.json.JSONArray
+import org.json.JSONObject
 import retrofit2.Call
 import java.net.HttpURLConnection
 
@@ -55,9 +57,32 @@ fun <T> Call<T>.callApi(
 internal fun isRejectedToken(code: Int, errorBody: String?, accessToken: String?, nowMillis: Long): Boolean = when (code) {
     HttpURLConnection.HTTP_UNAUTHORIZED -> true
     HttpURLConnection.HTTP_BAD_REQUEST, HttpURLConnection.HTTP_FORBIDDEN ->
-        errorBody.orEmpty().contains("TOKEN_ERROR") || isExpired(accessToken, nowMillis)
+        hasTokenErrorCode(errorBody) || isExpired(accessToken, nowMillis)
     else -> false
 }
+
+/**
+ * True when Kinde's error body carries the code TOKEN_ERROR, as in
+ * `[{"Code":"TOKEN_ERROR","Message":"…"}]`. Only the code is compared: the same
+ * words in a message don't count.
+ */
+private fun hasTokenErrorCode(errorBody: String?): Boolean {
+    val text = errorBody?.trim().orEmpty()
+    fun JSONObject.code() = optString("Code").ifEmpty { optString("code") }
+    fun JSONArray.objects() = (0 until length()).mapNotNull { optJSONObject(it) }
+    val errors = try {
+        when {
+            text.startsWith("[") -> JSONArray(text).objects()
+            text.startsWith("{") -> JSONObject(text).let { listOf(it) + (it.optJSONArray("errors")?.objects() ?: emptyList()) }
+            else -> emptyList()
+        }
+    } catch (e: Exception) {
+        emptyList()
+    }
+    return errors.any { it.code() == TOKEN_ERROR_CODE }
+}
+
+private const val TOKEN_ERROR_CODE = "TOKEN_ERROR"
 
 private fun isExpired(accessToken: String?, nowMillis: Long): Boolean {
     val payload = accessToken?.split('.')?.getOrNull(1) ?: return false
