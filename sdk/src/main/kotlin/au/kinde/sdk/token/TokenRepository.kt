@@ -77,12 +77,18 @@ class TokenRepository(private val tokenApi: TokenApi, private val version: Strin
         return Pair(response, null)
     }
 
-    /**
-     * Revokes [token] at Kinde's revocation endpoint (RFC 7009). Returns true when
-     * Kinde accepted the request; Kinde answers 200 for tokens that are already
-     * invalid too.
-     */
-    fun revokeRefreshToken(token: String, clientId: String): Boolean = try {
+    /** Outcome of a revocation request. */
+    enum class Revocation {
+        /** Kinde accepted it (RFC 7009: also for a token that was already invalid). */
+        REVOKED,
+        /** Kinde refused the request itself (e.g. an unknown client); retrying won't help. */
+        REJECTED,
+        /** No answer, or a server error: worth retrying later. */
+        FAILED
+    }
+
+    /** Revokes a refresh token at Kinde's revocation endpoint (RFC 7009). */
+    fun revokeRefreshToken(token: String, clientId: String): Revocation = try {
         tokenApi.revokeToken(
             LANGUAGE_HEADER.format(version),
             mapOf(
@@ -93,10 +99,14 @@ class TokenRepository(private val tokenApi: TokenApi, private val version: Strin
         ).execute().let { response ->
             response.body()?.close()
             response.errorBody()?.close()
-            response.isSuccessful
+            when {
+                response.isSuccessful -> Revocation.REVOKED
+                response.code() in 400..499 -> Revocation.REJECTED
+                else -> Revocation.FAILED
+            }
         }
     } catch (e: Exception) {
-        false
+        Revocation.FAILED
     }
 
     private companion object {

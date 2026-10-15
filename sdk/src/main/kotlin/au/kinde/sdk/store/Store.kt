@@ -51,6 +51,17 @@ class Store(context: Context, private val key: String) {
 
     fun getKeys(): String? = retrieve(KEYS_PREF)
 
+    /** A refresh token logout still has to revoke, kept until Kinde accepts the revocation. */
+    fun savePendingRevocation(record: String) {
+        authPrefs.edit().putString(PENDING_REVOCATION_PREF, encryptMsg(record)).commit()
+    }
+
+    fun getPendingRevocation(): String? = retrieve(PENDING_REVOCATION_PREF)
+
+    fun clearPendingRevocation() {
+        authPrefs.edit().remove(PENDING_REVOCATION_PREF).apply()
+    }
+
     private fun store(dataKey: String, data: String) {
         authPrefs.edit().putString(dataKey, encryptMsg(data)).apply()
     }
@@ -114,6 +125,7 @@ class Store(context: Context, private val key: String) {
         private const val PREFS_NAME = "app_prefs_secure"
         private const val AUTH_STATE_PREF = "auth_state"
         private const val KEYS_PREF = "keys"
+        private const val PENDING_REVOCATION_PREF = "pending_revocation"
         private const val IV_PREF = "iv"
 
         private const val IV_SIZE = 16

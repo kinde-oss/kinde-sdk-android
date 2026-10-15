@@ -48,6 +48,7 @@ import net.openid.appauth.AuthorizationService
 import net.openid.appauth.AuthorizationServiceConfiguration
 import net.openid.appauth.CodeVerifierUtil
 import net.openid.appauth.EndSessionRequest
+import org.json.JSONObject
 import net.openid.appauth.ResponseTypeValues
 import net.openid.appauth.TokenRequest
 import retrofit2.Call
@@ -609,10 +610,20 @@ class KindeClient private constructor(
     private fun completeLogoutLocally() {
         val storeToClean = store
         // Captured before the overrides are cleared: the token belongs to the
-        // domain and client that issued it.
-        val refreshToken = synchronized(stateLock) { state.refreshToken }
+        // domain and client that issued it. The issuing client id is saved with the
+        // session, so it is still known after a process restart.
+        val (refreshToken, clientId) = synchronized(stateLock) {
+            state.refreshToken to (state.lastAuthorizationResponse?.request?.clientId
+                ?: runtimeClientId ?: configClientId)
+        }
         val repository = tokenRepository
-        val clientId = runtimeClientId ?: configClientId
+        // Recorded before the session is deleted, so a revocation cut short by the
+        // process ending is retried on the next launch.
+        if (!refreshToken.isNullOrEmpty()) {
+            storeToClean.savePendingRevocation(
+                JSONObject().put(REVOKE_TOKEN, refreshToken).put(REVOKE_CLIENT_ID, clientId).toString()
+            )
+        }
         clearRuntimeOverrides()
 
         synchronized(stateLock) {
@@ -625,11 +636,7 @@ class KindeClient private constructor(
         // The end-session page ends the browser session only; revoke the refresh
         // token too so a copy of it can't mint new tokens after logout.
         if (!refreshToken.isNullOrEmpty()) {
-            thread {
-                if (!repository.revokeRefreshToken(refreshToken, clientId)) {
-                    android.util.Log.w("KindeSDK", "Refresh token revocation failed; the session is cleared locally")
-                }
-            }
+            thread { revokePending(storeToClean, repository) }
         }
 
         notifyLogout()
@@ -1485,9 +1492,38 @@ class KindeClient private constructor(
      * Initializes domain-specific data including keys and authentication state.
      * This should be called when setting up the SDK or when switching domains.
      */
+    /**
+     * Sends the revocation recorded by logout, if any, and forgets it once Kinde has
+     * answered for good. Network failures and server errors keep it for the next launch.
+     */
+    private fun revokePending(storeWithRecord: Store, repository: TokenRepository) {
+        val record = storeWithRecord.getPendingRevocation()?.let { runCatching { JSONObject(it) }.getOrNull() }
+        val token = record?.optString(REVOKE_TOKEN).orEmpty()
+        val clientId = record?.optString(REVOKE_CLIENT_ID).orEmpty()
+        if (token.isEmpty() || clientId.isEmpty()) {
+            storeWithRecord.clearPendingRevocation()
+            return
+        }
+        when (repository.revokeRefreshToken(token, clientId)) {
+            TokenRepository.Revocation.REVOKED -> storeWithRecord.clearPendingRevocation()
+            TokenRepository.Revocation.REJECTED -> {
+                android.util.Log.w("KindeSDK", "Kinde refused to revoke the logged-out refresh token")
+                storeWithRecord.clearPendingRevocation()
+            }
+            TokenRepository.Revocation.FAILED ->
+                android.util.Log.w("KindeSDK", "Refresh token revocation failed; retrying on the next launch")
+        }
+    }
+
     private fun initializeStoreData() {
         // Capture store reference to prevent race condition if domain switches during async request
         val storeForRequest = store
+
+        // A logout whose revocation didn't get through: try again.
+        if (storeForRequest.getPendingRevocation() != null) {
+            val repository = tokenRepository
+            thread { revokePending(storeForRequest, repository) }
+        }
 
         // Fetch and store keys for the domain if not already present
         if (storeForRequest.getKeys().isNullOrEmpty()) {
@@ -1660,6 +1696,8 @@ class KindeClient private constructor(
         private const val AUTH_URL = "https://%s/oauth2/auth"
         private const val TOKEN_URL = "https://%s/oauth2/token"
         private const val LOGOUT_URL = "https://%s/logout"
+        private const val REVOKE_TOKEN = "token"
+        private const val REVOKE_CLIENT_ID = "client_id"
 
         private const val REGISTRATION_PAGE_PARAM_NAME = "start_page"
         private const val REGISTRATION_PAGE_PARAM_VALUE = "registration"

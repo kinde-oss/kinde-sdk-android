@@ -9,8 +9,6 @@ import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import okio.Buffer
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import retrofit2.Retrofit
 import java.io.IOException
@@ -36,9 +34,9 @@ class TokenRepositoryRevokeTest {
 
     @Test
     fun `revoke posts the refresh token to Kinde's revocation endpoint`() {
-        val revoked = repository { reply(it, 200) }.revokeRefreshToken("refresh-123", "client-abc")
+        val result = repository { reply(it, 200) }.revokeRefreshToken("refresh-123", "client-abc")
 
-        assertTrue(revoked)
+        assertEquals(TokenRepository.Revocation.REVOKED, result)
         val request = requests.single()
         assertEquals("POST", request.method)
         assertEquals("https://example.kinde.com/oauth2/revoke", request.url.toString())
@@ -50,18 +48,25 @@ class TokenRepositoryRevokeTest {
     }
 
     @Test
-    fun `a rejected revocation reports failure`() {
-        val revoked = repository { reply(it, 401, """{"error":"invalid_client"}""") }
+    fun `a refused revocation is not worth retrying`() {
+        val result = repository { reply(it, 401, """{"error":"invalid_client"}""") }
             .revokeRefreshToken("refresh-123", "client-abc")
 
-        assertFalse(revoked)
+        assertEquals(TokenRepository.Revocation.REJECTED, result)
     }
 
     @Test
-    fun `a network failure reports failure instead of throwing`() {
-        val revoked = repository { throw IOException("offline") }
+    fun `a server error is worth retrying`() {
+        val result = repository { reply(it, 503) }.revokeRefreshToken("refresh-123", "client-abc")
+
+        assertEquals(TokenRepository.Revocation.FAILED, result)
+    }
+
+    @Test
+    fun `a network failure is worth retrying, and doesn't throw`() {
+        val result = repository { throw IOException("offline") }
             .revokeRefreshToken("refresh-123", "client-abc")
 
-        assertFalse(revoked)
+        assertEquals(TokenRepository.Revocation.FAILED, result)
     }
 }
