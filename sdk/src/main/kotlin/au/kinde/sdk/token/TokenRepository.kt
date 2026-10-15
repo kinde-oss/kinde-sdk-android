@@ -77,7 +77,42 @@ class TokenRepository(private val tokenApi: TokenApi, private val version: Strin
         return Pair(response, null)
     }
 
+    /** Outcome of a revocation request. */
+    enum class Revocation {
+        /** Kinde accepted it (RFC 7009: also for a token that was already invalid). */
+        REVOKED,
+        /** Kinde refused the request itself (e.g. an unknown client); retrying won't help. */
+        REJECTED,
+        /** No answer, or a server error: worth retrying later. */
+        FAILED
+    }
+
+    /** Revokes a refresh token at Kinde's revocation endpoint (RFC 7009). */
+    fun revokeRefreshToken(token: String, clientId: String): Revocation = try {
+        tokenApi.revokeToken(
+            LANGUAGE_HEADER.format(version),
+            mapOf(
+                PARAM_TOKEN to token,
+                PARAM_TOKEN_TYPE_HINT to TOKEN_TYPE_REFRESH,
+                TokenRequest.PARAM_CLIENT_ID to clientId
+            )
+        ).execute().let { response ->
+            response.body()?.close()
+            response.errorBody()?.close()
+            when {
+                response.isSuccessful -> Revocation.REVOKED
+                response.code() in 400..499 -> Revocation.REJECTED
+                else -> Revocation.FAILED
+            }
+        }
+    } catch (e: Exception) {
+        Revocation.FAILED
+    }
+
     private companion object {
+        private const val PARAM_TOKEN = "token"
+        private const val PARAM_TOKEN_TYPE_HINT = "token_type_hint"
+        private const val TOKEN_TYPE_REFRESH = "refresh_token"
         private const val LANGUAGE_HEADER = "Kotlin/%s"
     }
 }
