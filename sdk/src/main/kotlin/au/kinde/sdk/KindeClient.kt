@@ -147,6 +147,11 @@ class KindeClient private constructor(
     private var lastTokenUpdateTime = 0L
     private val stateLock = Object()
     private val refreshLock = Object()
+
+    // Serializes onNewToken deliveries after an exchange or refresh (see
+    // notifyNewTokenIfCurrent). Separate from refreshLock and stateLock so app
+    // callbacks never run while those are held.
+    private val tokenNotifyLock = Any()
     private val domainSwitchLock = Object()
 
     @Volatile
@@ -311,6 +316,18 @@ class KindeClient private constructor(
     @androidx.annotation.VisibleForTesting
     internal fun activeEndSessionLauncher(): EndSessionLauncher? =
         endSessionRoutes.lastOrNull()?.launcher
+
+    /**
+     * Announces [token] unless a newer one has replaced it meanwhile. Overlapping
+     * refreshes can finish their notifications in either order; delivering only the
+     * current token, one delivery at a time, means listeners never end on a stale one.
+     */
+    private fun notifyNewTokenIfCurrent(token: String) {
+        synchronized(tokenNotifyLock) {
+            if (synchronized(stateLock) { state.accessToken } != token) return
+            notifyNewToken(token)
+        }
+    }
 
     private fun notifyNewToken(token: String) {
         LinkedHashSet(listeners).forEach { it.onNewToken(token) }
@@ -1290,7 +1307,7 @@ class KindeClient private constructor(
             // and keep the schedule going even if one throws.
             try {
                 if (shouldNotify) {
-                    notifyNewToken(snapshotToken)
+                    notifyNewTokenIfCurrent(snapshotToken)
                 }
             } finally {
                 scheduleTokenRefresh()
