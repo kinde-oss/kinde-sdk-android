@@ -1206,16 +1206,15 @@ class KindeClient private constructor(
                     store.saveState(state.jsonSerializeString())
                     lastTokenUpdateTime = System.currentTimeMillis()
 
-                    if (notifyListener && !state.accessToken.isNullOrEmpty()) {
+                    // Every successful exchange or refresh changes the token apps use, so
+                    // listeners always hear about it. notifyListener only decides what a
+                    // failure does (see below).
+                    if (!state.accessToken.isNullOrEmpty()) {
                         shouldNotify = true
                         snapshotToken = state.accessToken.orEmpty()
                     }
                 }
             }
-            if (shouldNotify) {
-                notifyNewToken(snapshotToken)
-            }
-
             if (grantType != "refresh_token") {
                 // Reset invitation handling flag after successful interactive authentication
                 invitationState.completeHandling()
@@ -1235,7 +1234,15 @@ class KindeClient private constructor(
                 return false
             }
 
-            scheduleTokenRefresh()
+            // Listeners are app code: call them only once the refresh state is released,
+            // and keep the schedule going even if one throws.
+            try {
+                if (shouldNotify) {
+                    notifyNewToken(snapshotToken)
+                }
+            } finally {
+                scheduleTokenRefresh()
+            }
         } else {
             // Check if this is a 401/invalid_grant error (invalid refresh token)
             val isInvalidRefreshToken = ex?.let { exception ->
