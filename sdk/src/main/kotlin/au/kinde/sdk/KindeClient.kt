@@ -148,10 +148,12 @@ class KindeClient private constructor(
     private val stateLock = Object()
     private val refreshLock = Object()
 
-    // Serializes onNewToken deliveries after an exchange or refresh (see
-    // notifyNewTokenIfCurrent). Separate from refreshLock and stateLock so app
-    // callbacks never run while those are held.
+    // onNewToken deliveries after an exchange or refresh go through one queue (see
+    // notifyNewTokenIfCurrent). tokenNotifyLock guards only the queue: app callbacks
+    // never run while it, refreshLock or stateLock is held.
     private val tokenNotifyLock = Any()
+    private val tokenNotifications = ArrayDeque<String>()
+    private var deliveringTokens = false
     private val domainSwitchLock = Object()
 
     @Volatile
@@ -318,14 +320,34 @@ class KindeClient private constructor(
         endSessionRoutes.lastOrNull()?.launcher
 
     /**
-     * Announces [token] unless a newer one has replaced it meanwhile. Overlapping
-     * refreshes can finish their notifications in either order; delivering only the
-     * current token, one delivery at a time, means listeners never end on a stale one.
+     * Announces [token] to every listener, in the order tokens were issued. Tokens
+     * queue up and one caller delivers them: a token issued while a delivery is under
+     * way (by another thread, or by a listener whose API call refreshed) waits until
+     * every listener has heard the current one. A token already replaced by a newer
+     * one is skipped, so listeners never end on a stale token.
      */
     private fun notifyNewTokenIfCurrent(token: String) {
         synchronized(tokenNotifyLock) {
-            if (synchronized(stateLock) { state.accessToken } != token) return
-            notifyNewToken(token)
+            tokenNotifications.addLast(token)
+            if (deliveringTokens) return
+            deliveringTokens = true
+        }
+        try {
+            while (true) {
+                val next = synchronized(tokenNotifyLock) {
+                    tokenNotifications.removeFirstOrNull() ?: run {
+                        deliveringTokens = false
+                        return
+                    }
+                }
+                if (synchronized(stateLock) { state.accessToken } == next) {
+                    notifyNewToken(next)
+                }
+            }
+        } catch (t: Throwable) {
+            // A listener threw: let the next notification start a fresh delivery.
+            synchronized(tokenNotifyLock) { deliveringTokens = false }
+            throw t
         }
     }
 
