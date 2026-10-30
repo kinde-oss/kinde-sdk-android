@@ -298,4 +298,47 @@ class KindeClientTest {
             awaitCondition { listener.logoutCount == 1 }
         )
     }
+
+    private fun key(kid: String) = au.kinde.sdk.keys.Key("AQAB", "modulus", "RS256", kid, "RSA")
+
+    @Test
+    fun `a token is verified with the key it names`() {
+        installKindeMetaData(context)
+        val keys = listOf(key("k1"), key("k2"))
+
+        assertEquals(listOf("k2"), KindeClient.getInstance(context).signingKeysFor("k2", keys).map { it.keyId })
+    }
+
+    @Test
+    fun `a token naming an unknown key has no candidates, which triggers a key refresh`() {
+        installKindeMetaData(context)
+
+        assertTrue(KindeClient.getInstance(context).signingKeysFor("k3", listOf(key("k1"), key("k2"))).isEmpty())
+    }
+
+    @Test
+    fun `a token without a key ID may be verified by any published key`() {
+        installKindeMetaData(context)
+        val keys = listOf(key("k1"), key("k2"))
+
+        assertEquals(keys, KindeClient.getInstance(context).signingKeysFor(null, keys))
+    }
+
+    @Test
+    fun `a broken key does not stop a later key verifying the token`() {
+        installKindeMetaData(context)
+        val pair = java.security.KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+        val pub = pair.public as java.security.interfaces.RSAPublicKey
+        val enc = java.util.Base64.getUrlEncoder().withoutPadding()
+        fun b64(n: java.math.BigInteger) = enc.encodeToString(n.toByteArray().dropWhile { it == 0.toByte() }.toByteArray())
+        val signed = enc.encodeToString("""{"alg":"RS256"}""".toByteArray()) + "." + enc.encodeToString("""{"sub":"kp_1"}""".toByteArray())
+        val sig = java.security.Signature.getInstance("SHA256withRSA").run {
+            initSign(pair.private); update(signed.toByteArray()); sign()
+        }
+        val jwt = signed + "." + enc.encodeToString(sig)
+        val broken = au.kinde.sdk.keys.Key("AQAB", "modulus", "RS256", "bad", "NOT_A_KEY_TYPE")
+        val good = au.kinde.sdk.keys.Key(b64(pub.publicExponent), b64(pub.modulus), "RS256", "good", "RSA")
+
+        assertTrue(KindeClient.getInstance(context).verifiedByAny(jwt, listOf(broken, good)))
+    }
 }
