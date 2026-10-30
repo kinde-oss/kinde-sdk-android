@@ -78,6 +78,18 @@ class ClaimDelegateTest {
     }
 
     @Test
+    fun `role entries with a null or non-string key are skipped`() {
+        signIn(mapOf("roles" to listOf(
+            mapOf("id" to "x", "key" to JSONObject.NULL),
+            mapOf("id" to "y", "key" to 42),
+            mapOf("key" to "role_read")
+        )))
+
+        assertEquals(listOf("role_read"), ClaimDelegate.getRoles().roles)
+        assertFalse(ClaimDelegate.getRole("null").isGranted)
+    }
+
+    @Test
     fun `permissions and organizations are unchanged`() {
         signIn(
             mapOf("permissions" to listOf("read", "write"), "roles" to kindeRoles),

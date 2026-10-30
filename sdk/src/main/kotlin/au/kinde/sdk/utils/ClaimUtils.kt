@@ -172,7 +172,8 @@ object ClaimDelegate : ClaimApi {
      * Plain strings (permissions, org_codes, and roles from older tokens) are used as-is.
      */
     private fun listEntry(claim: String, entry: Any?): String? = when (entry) {
-        is JSONObject -> entry.optString("key").takeIf { it.isNotBlank() }
+        // optString would turn a JSON null into the string "null", so read the raw value.
+        is JSONObject -> (entry.opt("key") as? String)?.takeIf { it.isNotBlank() }
             ?: run {
                 Log.w("KindeClaim", "Skipping an entry of \"$claim\" with no key")
                 null
