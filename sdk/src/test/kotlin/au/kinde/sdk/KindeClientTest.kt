@@ -298,4 +298,31 @@ class KindeClientTest {
             awaitCondition { listener.logoutCount == 1 }
         )
     }
+
+    @Test
+    fun `only a refusal of the refresh token itself counts as rejected`() {
+        installKindeMetaData(context)
+        val client = KindeClient.getInstance(context)
+        fun oauth(error: String) = net.openid.appauth.AuthorizationException.fromOAuthTemplate(
+            net.openid.appauth.AuthorizationException.TokenRequestErrors.byString(error), error, null, null)
+        fun general(code: Int) = net.openid.appauth.AuthorizationException(
+            net.openid.appauth.AuthorizationException.TYPE_GENERAL_ERROR, code, null, "x", null, null)
+
+        assertTrue(client.isRefreshTokenRejected(oauth("invalid_grant")))
+        assertFalse("bare 401 without an OAuth body may be a proxy", client.isRefreshTokenRejected(general(401)))
+        assertFalse("server error is transient", client.isRefreshTokenRejected(general(503)))
+        assertFalse("network failure is transient", client.isRefreshTokenRejected(general(1006)))
+        assertFalse(client.isRefreshTokenRejected(oauth("invalid_client")))
+        assertFalse(client.isRefreshTokenRejected(null))
+    }
+
+    @Test
+    fun `refresh retries back off to five minutes`() {
+        installKindeMetaData(context)
+        val client = KindeClient.getInstance(context)
+
+        val delays = generateSequence(10_000L) { client.nextRetryDelay(it) }.take(8).toList()
+
+        assertEquals(listOf(10_000L, 20_000L, 40_000L, 80_000L, 160_000L, 300_000L, 300_000L, 300_000L), delays)
+    }
 }
