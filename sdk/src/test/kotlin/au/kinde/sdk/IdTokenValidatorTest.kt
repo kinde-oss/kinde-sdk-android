@@ -59,6 +59,12 @@ class IdTokenValidatorTest {
     }
 
     @Test
+    fun `a present azp must name the client even with one audience`() {
+        assertTrue(check(token("aud" to client, "azp" to "other"))!!.contains("authorized party"))
+        assertNull(check(token("aud" to client, "azp" to client)))
+    }
+
+    @Test
     fun `wrong issuer is rejected`() {
         assertTrue(check(token("iss" to "https://evil.example.com"))!!.contains("issuer"))
     }

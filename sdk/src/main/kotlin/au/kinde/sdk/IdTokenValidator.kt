@@ -51,8 +51,9 @@ internal object IdTokenValidator {
         if (clientId !in audiences) {
             return "ID token audience does not include this client"
         }
-        // With several audiences, azp must be present and name this client.
-        if (audiences.size > 1 && claims.optString("azp") != clientId) {
+        // A present azp must name this client; with several audiences it is required.
+        val azp = claims.opt("azp")
+        if ((azp != null || audiences.size > 1) && azp != clientId) {
             return "ID token authorized party is not this client"
         }
 
