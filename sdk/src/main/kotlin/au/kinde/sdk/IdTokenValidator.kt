@@ -47,16 +47,21 @@ internal object IdTokenValidator {
             is JSONArray -> (0 until aud.length()).map { aud.optString(it) }
             else -> emptyList()
         }
-        if (clientId !in audiences && claims.optString("azp") != clientId) {
+        // OIDC requires aud to contain the client ID; azp doesn't replace it.
+        if (clientId !in audiences) {
             return "ID token audience does not include this client"
+        }
+        // With several audiences, azp must be present and name this client.
+        if (audiences.size > 1 && claims.optString("azp") != clientId) {
+            return "ID token authorized party is not this client"
         }
 
         val now = nowMillis / 1000
-        if (!claims.has("exp")) return "ID token has no expiry"
-        if (now > claims.getLong("exp") + CLOCK_SKEW_SECONDS) return "ID token has expired"
+        val exp = numericClaim(claims, "exp") ?: return "ID token has no numeric expiry"
+        if (now > exp + CLOCK_SKEW_SECONDS) return "ID token has expired"
 
-        if (!claims.has("iat")) return "ID token has no issue time"
-        if (Math.abs(now - claims.getLong("iat")) > MAX_IAT_AGE_SECONDS + CLOCK_SKEW_SECONDS) {
+        val iat = numericClaim(claims, "iat") ?: return "ID token has no numeric issue time"
+        if (Math.abs(now - iat) > MAX_IAT_AGE_SECONDS + CLOCK_SKEW_SECONDS) {
             return "ID token issue time is more than 10 minutes from the device clock"
         }
 
@@ -65,4 +70,8 @@ internal object IdTokenValidator {
         }
         return null
     }
+
+    /** A NumericDate claim, or null when it is missing or not a number. */
+    private fun numericClaim(claims: JSONObject, name: String): Long? =
+        (claims.opt(name) as? Number)?.toLong()
 }

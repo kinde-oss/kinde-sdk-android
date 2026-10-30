@@ -1216,12 +1216,17 @@ class KindeClient private constructor(
 
         // The SDK exchanges tokens itself rather than through AppAuth, so it must
         // apply the OpenID Connect ID token checks AppAuth would have.
-        val idTokenProblem = tokenResponse?.idToken?.let { idToken ->
+        val isCodeExchange = tokenRequest.grantType == GrantTypeValues.AUTHORIZATION_CODE
+        val idTokenProblem = if (tokenResponse != null && tokenResponse.idToken == null && isCodeExchange) {
+            // Sign-in asks for the openid scope, so the response must carry an ID token.
+            // Refresh responses may omit it.
+            "Token response has no ID token"
+        } else tokenResponse?.idToken?.let { idToken ->
             IdTokenValidator.validate(
                 idToken = idToken,
                 expectedIssuer = HTTPS.format(runtimeDomain ?: configDomain),
                 clientId = tokenRequest.clientId,
-                expectedNonce = if (tokenRequest.grantType == GrantTypeValues.AUTHORIZATION_CODE) tokenRequest.nonce else null,
+                expectedNonce = if (isCodeExchange) tokenRequest.nonce else null,
                 nowMillis = System.currentTimeMillis()
             )
         }

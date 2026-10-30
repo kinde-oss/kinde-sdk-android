@@ -43,9 +43,19 @@ class IdTokenValidatorTest {
     }
 
     @Test
-    fun `audience may be a string, or azp may name the client`() {
+    fun `audience may be a string or a list containing the client`() {
         assertNull(check(token("aud" to client)))
-        assertNull(check(token("aud" to listOf("other"), "azp" to client)))
+        assertNull(check(token("aud" to listOf(client, "other"), "azp" to client)))
+    }
+
+    @Test
+    fun `azp does not replace the client in aud`() {
+        assertTrue(check(token("aud" to listOf("other"), "azp" to client))!!.contains("audience"))
+    }
+
+    @Test
+    fun `several audiences need azp naming the client`() {
+        assertTrue(check(token("aud" to listOf(client, "other")))!!.contains("authorized party"))
     }
 
     @Test
@@ -66,8 +76,14 @@ class IdTokenValidatorTest {
 
     @Test
     fun `missing exp or iat is rejected`() {
-        assertEquals("ID token has no expiry", check(token("exp" to null)))
-        assertEquals("ID token has no issue time", check(token("iat" to null)))
+        assertEquals("ID token has no numeric expiry", check(token("exp" to null)))
+        assertEquals("ID token has no numeric issue time", check(token("iat" to null)))
+    }
+
+    @Test
+    fun `non-numeric exp or iat is rejected without throwing`() {
+        assertEquals("ID token has no numeric expiry", check(token("exp" to "abc")))
+        assertEquals("ID token has no numeric issue time", check(token("iat" to "abc")))
     }
 
     @Test
