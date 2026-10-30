@@ -588,10 +588,12 @@ class KindeClient private constructor(
     /**
      * True when the token endpoint refused the refresh token itself, as opposed to
      * a transient failure (no network, 5xx) after which the session is still good.
+     * Only the OAuth `invalid_grant` error counts: a bare 401 without an OAuth body
+     * can come from a proxy, WAF or captive portal and says nothing about the token.
      */
     @androidx.annotation.VisibleForTesting
     internal fun isRefreshTokenRejected(ex: AuthorizationException?): Boolean =
-        ex != null && (ex.error == "invalid_grant" || ex.code == java.net.HttpURLConnection.HTTP_UNAUTHORIZED)
+        ex?.error == "invalid_grant"
 
     /**
      * Ends a session whose refresh token Kinde no longer accepts. The server-side

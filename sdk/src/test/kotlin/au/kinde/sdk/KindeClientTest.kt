@@ -309,7 +309,7 @@ class KindeClientTest {
             net.openid.appauth.AuthorizationException.TYPE_GENERAL_ERROR, code, null, "x", null, null)
 
         assertTrue(client.isRefreshTokenRejected(oauth("invalid_grant")))
-        assertTrue("401 without an OAuth body", client.isRefreshTokenRejected(general(401)))
+        assertFalse("bare 401 without an OAuth body may be a proxy", client.isRefreshTokenRejected(general(401)))
         assertFalse("server error is transient", client.isRefreshTokenRejected(general(503)))
         assertFalse("network failure is transient", client.isRefreshTokenRejected(general(1006)))
         assertFalse(client.isRefreshTokenRejected(oauth("invalid_client")))
