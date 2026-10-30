@@ -48,6 +48,7 @@ import net.openid.appauth.AuthorizationService
 import net.openid.appauth.AuthorizationServiceConfiguration
 import net.openid.appauth.CodeVerifierUtil
 import net.openid.appauth.EndSessionRequest
+import net.openid.appauth.GrantTypeValues
 import net.openid.appauth.ResponseTypeValues
 import net.openid.appauth.TokenRequest
 import retrofit2.Call
@@ -1100,11 +1101,40 @@ class KindeClient private constructor(
         // Reconfigure API client if domain changed
         reconfigureApiClientIfNeeded(effectiveDomain)
 
+        val authRequest = buildAuthorizationRequest(
+            type, orgCode, loginHint, additionalParams, effectiveDomain, effectiveClientId,
+            connectionId, loginRedirect, scopes
+        )
+        launch(authService.getAuthorizationRequestIntent(authRequest))
+    }
+
+    /**
+     * The authorization request [authorize] sends. PKCE (S256) and a nonce are on
+     * unless the caller explicitly opts out of PKCE with [GrantType.NONE]: the SDK
+     * performs the code exchange itself, so PKCE needs nothing from the app.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun buildAuthorizationRequest(
+        type: GrantType?,
+        orgCode: String?,
+        loginHint: String?,
+        additionalParams: Map<String, String>,
+        effectiveDomain: String,
+        effectiveClientId: String,
+        connectionId: String?,
+        loginRedirect: String,
+        scopes: List<String>,
+    ): AuthorizationRequest {
         // Create service configuration with effective domain
         val loginServiceConfig = getServiceConfiguration(effectiveDomain)
 
-        val verifier =
-            if (type == GrantType.PKCE) CodeVerifierUtil.generateRandomCodeVerifier() else null
+        @Suppress("DEPRECATION")
+        val verifier = if (type == GrantType.NONE) {
+            android.util.Log.w("KindeSDK", "GrantType.NONE disables PKCE, which native apps should always use (RFC 8252). It will be removed in a future version.")
+            null
+        } else {
+            CodeVerifierUtil.generateRandomCodeVerifier()
+        }
         val authRequestBuilder = AuthorizationRequest.Builder(
             loginServiceConfig, // the authorization service configuration
             effectiveClientId, // the client ID (config or runtime override)
@@ -1132,11 +1162,11 @@ class KindeClient private constructor(
             authRequestBuilder.setLoginHint(it)
         }
 
-        val authRequest = authRequestBuilder
-            .setNonce(null)
+        // The builder sets a random nonce; it binds the ID token to this request and
+        // is checked in IdTokenValidator when the code is exchanged.
+        return authRequestBuilder
             .setScopes(scopes)
             .build()
-        launch(authService.getAuthorizationRequestIntent(authRequest))
     }
 
     private fun getToken(tokenRequest: TokenRequest, notifyListener: Boolean = true): Boolean {
@@ -1179,10 +1209,38 @@ class KindeClient private constructor(
             }
         }
 
-        val (resp, ex) = tokenRepository.getToken(
+        val (tokenResponse, tokenError) = tokenRepository.getToken(
             authState = state,
             tokenRequest = tokenRequest
         )
+
+        // The SDK exchanges tokens itself rather than through AppAuth, so it must
+        // apply the OpenID Connect ID token checks AppAuth would have.
+        val isCodeExchange = tokenRequest.grantType == GrantTypeValues.AUTHORIZATION_CODE
+        val idTokenProblem = if (tokenResponse != null && tokenResponse.idToken == null && isCodeExchange) {
+            // Sign-in asks for the openid scope, so the response must carry an ID token.
+            // Refresh responses may omit it.
+            "Token response has no ID token"
+        } else tokenResponse?.idToken?.let { idToken ->
+            IdTokenValidator.validate(
+                idToken = idToken,
+                expectedIssuer = HTTPS.format(runtimeDomain ?: configDomain),
+                clientId = tokenRequest.clientId,
+                expectedNonce = if (isCodeExchange) tokenRequest.nonce else null,
+                nowMillis = System.currentTimeMillis()
+            )
+        }
+        val resp = if (idTokenProblem == null) tokenResponse else null
+        val ex = tokenError ?: idTokenProblem?.let {
+            AuthorizationException(
+                AuthorizationException.TYPE_GENERAL_ERROR,
+                AuthorizationException.GeneralErrors.ID_TOKEN_VALIDATION_ERROR.code,
+                "invalid_id_token",
+                it,
+                null,
+                null
+            )
+        }
 
         if (resp != null) {
             // Check logout flag first, then clear isRefreshing if needed (avoid nested locks)

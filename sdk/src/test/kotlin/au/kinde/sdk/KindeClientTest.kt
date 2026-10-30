@@ -298,4 +298,44 @@ class KindeClientTest {
             awaitCondition { listener.logoutCount == 1 }
         )
     }
+
+    private fun request(type: GrantType?) = KindeClient.getInstance(context).buildAuthorizationRequest(
+        type, null, null, emptyMap(), TEST_DOMAIN, TEST_CLIENT_ID, null, "test.scheme://callback", listOf("openid")
+    )
+
+    @Test
+    fun `authorization requests use PKCE by default`() {
+        installKindeMetaData(context)
+
+        val req = request(null)
+
+        assertTrue(req.codeVerifier != null)
+        assertEquals("S256", req.codeVerifierChallengeMethod)
+    }
+
+    @Test
+    fun `GrantType PKCE uses PKCE`() {
+        installKindeMetaData(context)
+
+        assertTrue(request(GrantType.PKCE).codeVerifier != null)
+    }
+
+    @Test
+    @Suppress("DEPRECATION")
+    fun `GrantType NONE still opts out of PKCE`() {
+        installKindeMetaData(context)
+
+        assertNull(request(GrantType.NONE).codeVerifier)
+    }
+
+    @Test
+    fun `authorization requests carry a nonce`() {
+        installKindeMetaData(context)
+
+        val first = request(null).nonce
+        val second = request(null).nonce
+
+        assertTrue(!first.isNullOrBlank())
+        assertTrue("fresh per request", first != second)
+    }
 }
