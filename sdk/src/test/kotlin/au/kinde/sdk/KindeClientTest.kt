@@ -323,4 +323,22 @@ class KindeClientTest {
 
         assertEquals(keys, KindeClient.getInstance(context).signingKeysFor(null, keys))
     }
+
+    @Test
+    fun `a broken key does not stop a later key verifying the token`() {
+        installKindeMetaData(context)
+        val pair = java.security.KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+        val pub = pair.public as java.security.interfaces.RSAPublicKey
+        val enc = java.util.Base64.getUrlEncoder().withoutPadding()
+        fun b64(n: java.math.BigInteger) = enc.encodeToString(n.toByteArray().dropWhile { it == 0.toByte() }.toByteArray())
+        val signed = enc.encodeToString("""{"alg":"RS256"}""".toByteArray()) + "." + enc.encodeToString("""{"sub":"kp_1"}""".toByteArray())
+        val sig = java.security.Signature.getInstance("SHA256withRSA").run {
+            initSign(pair.private); update(signed.toByteArray()); sign()
+        }
+        val jwt = signed + "." + enc.encodeToString(sig)
+        val broken = au.kinde.sdk.keys.Key("AQAB", "modulus", "RS256", "bad", "NOT_A_KEY_TYPE")
+        val good = au.kinde.sdk.keys.Key(b64(pub.publicExponent), b64(pub.modulus), "RS256", "good", "RSA")
+
+        assertTrue(KindeClient.getInstance(context).verifiedByAny(jwt, listOf(broken, good)))
+    }
 }

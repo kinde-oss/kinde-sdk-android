@@ -200,8 +200,8 @@ class KindeClient private constructor(
     // most once per KEYS_REFRESH_MIN_INTERVAL_MS, retries with backoff while a saved
     // session is waiting for keys.
     private val keysLock = Object()
-    @Volatile
-    private var keysFetchInFlight = false
+    // Stores with a key fetch running. Identity-based, guarded by keysLock.
+    private val keysFetchInFlight: MutableSet<Store> = java.util.Collections.newSetFromMap(java.util.IdentityHashMap())
     @Volatile
     private var lastKeysRefreshMs = 0L
     @Volatile
@@ -1301,7 +1301,7 @@ class KindeClient private constructor(
                 requestKeys(forceRefresh = true)
                 false
             } else {
-                candidates.any { verifySignature(jwt, it) }
+                verifiedByAny(jwt, candidates)
             }
         } catch (ex: Exception) {
             notifyException(ex)
@@ -1322,6 +1322,18 @@ class KindeClient private constructor(
     @androidx.annotation.VisibleForTesting
     internal fun signingKeysFor(kid: String?, keys: List<au.kinde.sdk.keys.Key>): List<au.kinde.sdk.keys.Key> =
         if (kid == null) keys else keys.filter { it.keyId == kid }
+
+    /** True when any candidate verifies the token. A bad or incompatible key doesn't stop the next one being tried. */
+    @androidx.annotation.VisibleForTesting
+    internal fun verifiedByAny(jwt: String, candidates: List<au.kinde.sdk.keys.Key>): Boolean =
+        candidates.any { key ->
+            try {
+                verifySignature(jwt, key)
+            } catch (e: Exception) {
+                android.util.Log.w("KindeSDK", "Signing key ${key.keyId} could not verify the token", e)
+                false
+            }
+        }
 
     private fun verifySignature(jwt: String, key: au.kinde.sdk.keys.Key): Boolean {
         val bigExponent = BigInteger(1, decode(key.exponent, URL_SAFE))
@@ -1521,17 +1533,18 @@ class KindeClient private constructor(
     internal fun requestKeys(forceRefresh: Boolean) {
         val storeForRequest = store
         synchronized(keysLock) {
-            if (keysFetchInFlight) return
+            // Tracked per store, so a fetch for the previous domain doesn't block this one.
+            if (storeForRequest in keysFetchInFlight) return
             val now = System.currentTimeMillis()
             if (forceRefresh && now - lastKeysRefreshMs < KEYS_REFRESH_MIN_INTERVAL_MS) return
             if (!forceRefresh && !storeForRequest.getKeys().isNullOrEmpty()) return
             if (forceRefresh) lastKeysRefreshMs = now
-            keysFetchInFlight = true
+            keysFetchInFlight.add(storeForRequest)
         }
         keysApi.getKeys().enqueue(object : Callback<Keys> {
             override fun onResponse(call: Call<Keys>, response: Response<Keys>) {
                 val keys = response.body()
-                synchronized(keysLock) { keysFetchInFlight = false }
+                synchronized(keysLock) { keysFetchInFlight.remove(storeForRequest) }
                 if (response.isSuccessful && keys != null && keys.keys.isNotEmpty()) {
                     keysRetryDelayMs = KEYS_RETRY_INITIAL_MS
                     // Use captured store reference to ensure keys are saved to correct store
@@ -1544,7 +1557,7 @@ class KindeClient private constructor(
             }
 
             override fun onFailure(call: Call<Keys>, t: Throwable) {
-                synchronized(keysLock) { keysFetchInFlight = false }
+                synchronized(keysLock) { keysFetchInFlight.remove(storeForRequest) }
                 keysUnavailable(storeForRequest, Exception(t))
             }
         })
