@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
+import androidx.annotation.WorkerThread
 import android.util.Base64.URL_SAFE
 import android.util.Base64.decode
 import androidx.core.net.toUri
@@ -78,6 +79,15 @@ import kotlin.concurrent.thread
  *
  * Login, registration and logout open a browser tab and therefore still require
  * an activity-bound [KindeSDK].
+ *
+ * Threading: methods that call Kinde over the network ([getUser], [getUserProfileV2],
+ * [getEntitlements], [getEntitlement], [refreshToken], and the permission, role and flag
+ * methods with `ApiOptions(forceApi = true)`) block, so call them off the main thread. On
+ * the main thread they make no request: they return null (false for [refreshToken]) and
+ * report [WrongThreadException] to [SDKListener.onException]; the forceApi variants throw.
+ * Methods that read the tokens ([getToken], [isAuthenticated], the claim, permission, role
+ * and flag methods without forceApi) are safe on any thread. [SDKListener] callbacks can
+ * arrive on any thread; see its documentation.
  */
 class KindeClient private constructor(
     private val appContext: Context,
@@ -137,6 +147,13 @@ class KindeClient private constructor(
     private var lastTokenUpdateTime = 0L
     private val stateLock = Object()
     private val refreshLock = Object()
+
+    // onNewToken deliveries after an exchange or refresh go through one queue (see
+    // notifyNewTokenIfCurrent). tokenNotifyLock guards only the queue: app callbacks
+    // never run while it, refreshLock or stateLock is held.
+    private val tokenNotifyLock = Any()
+    private val tokenNotifications = ArrayDeque<String>()
+    private var deliveringTokens = false
     private val domainSwitchLock = Object()
 
     @Volatile
@@ -302,6 +319,40 @@ class KindeClient private constructor(
     internal fun activeEndSessionLauncher(): EndSessionLauncher? =
         endSessionRoutes.lastOrNull()?.launcher
 
+    /**
+     * Announces [token] to every listener, in the order tokens were issued. Tokens
+     * queue up and one caller delivers them: a token issued while a delivery is under
+     * way (by another thread, or by a listener whose API call refreshed) waits until
+     * every listener has heard the current one. A token already replaced by a newer
+     * one is skipped, so listeners never end on a stale token.
+     */
+    private fun notifyNewTokenIfCurrent(token: String) {
+        synchronized(tokenNotifyLock) {
+            tokenNotifications.addLast(token)
+            if (deliveringTokens) return
+            deliveringTokens = true
+        }
+        // A listener that throws must not strand tokens queued behind it (for example
+        // by a refresh it triggered): keep draining, then rethrow the first failure.
+        var failure: Throwable? = null
+        while (true) {
+            val next = synchronized(tokenNotifyLock) {
+                tokenNotifications.removeFirstOrNull() ?: run {
+                    deliveringTokens = false
+                    null
+                }
+            } ?: break
+            if (synchronized(stateLock) { state.accessToken } == next) {
+                try {
+                    notifyNewToken(next)
+                } catch (t: Throwable) {
+                    failure?.addSuppressed(t) ?: run { failure = t }
+                }
+            }
+        }
+        failure?.let { throw it }
+    }
+
     private fun notifyNewToken(token: String) {
         LinkedHashSet(listeners).forEach { it.onNewToken(token) }
     }
@@ -350,7 +401,7 @@ class KindeClient private constructor(
         // Pre-refactor, every activity construction re-ran the keys fetch, so a
         // transient failure self-healed on the next screen. Preserve that: retry
         // whenever a facade attaches and keys are still missing.
-        if (store.getKeys().isNullOrEmpty()) {
+        if (!hasUsableKeys(store)) {
             initializeStoreData()
         }
 
@@ -784,7 +835,49 @@ class KindeClient private constructor(
 
     fun getEntitlement(key: String): EntitlementResponse? = callApi(oAuthApi.getEntitlement(key))
 
-    fun getEntitlements(): EntitlementsResponse? = callApi(oAuthApi.getEntitlements())
+    /**
+     * One page of the user's entitlements. For the next page pass
+     * `metadata.nextPageStartingAfter` as [startingAfter] while `metadata.hasMore` is true.
+     *
+     * @param pageSize Entitlements per page; Kinde's default when null.
+     * @param startingAfter Cursor from the previous page's metadata; null for the first page.
+     */
+    @JvmOverloads
+    fun getEntitlements(pageSize: Int? = null, startingAfter: String? = null): EntitlementsResponse? =
+        callApi(oAuthApi.getEntitlements(pageSize, startingAfter))
+
+    /**
+     * Refreshes the access token now, with the refresh token.
+     *
+     * The SDK already refreshes on a schedule while the app is in the foreground (the
+     * schedule pauses in the background) and when Kinde rejects an API call. Call this
+     * when you need a fresh token before that, for example in a background job that runs
+     * after the token expired, before sending it to your own API.
+     *
+     * Blocking network call: call it off the main thread. On the main thread it returns
+     * false and reports [WrongThreadException] to [SDKListener.onException].
+     *
+     * @return true when Kinde issued a new access token; listeners also get
+     * [SDKListener.onNewToken]. False when there is no session, a logout is in progress or
+     * the request failed (reported to onException). A refresh token Kinde rejects signs the
+     * user out, as for a scheduled refresh.
+     */
+    @WorkerThread
+    fun refreshToken(): Boolean {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            notifyException(WrongThreadException)
+            return false
+        }
+        val request = synchronized(stateLock) {
+            if (isLoggingOut || state.refreshToken.isNullOrEmpty()) return false
+            try {
+                state.createTokenRefreshRequest()
+            } catch (e: IllegalStateException) {
+                return false
+            }
+        }
+        return getToken(request, notifyListener = false)
+    }
 
     fun createUser(createUserRequest: CreateUserRequest? = null): CreateUser200Response? =
         callApi(usersApi.createUser(createUserRequest))
@@ -1201,21 +1294,22 @@ class KindeClient private constructor(
             var snapshotToken = ""
             synchronized(stateLock) {
                 if (!isLoggingOut) {
+                    val previousAccessToken = state.accessToken
                     state.update(resp, ex)
                     apiClient.setBearerToken(state.accessToken.orEmpty())
                     store.saveState(state.jsonSerializeString())
                     lastTokenUpdateTime = System.currentTimeMillis()
 
-                    if (notifyListener && !state.accessToken.isNullOrEmpty()) {
+                    // Listeners hear about every new access token. Kinde can return the same
+                    // token to an early refresh, and the scheduler may retry while it is
+                    // still inside the expiry buffer, so an unchanged token isn't announced.
+                    // notifyListener only decides what a failure does (see below).
+                    if (!state.accessToken.isNullOrEmpty() && state.accessToken != previousAccessToken) {
                         shouldNotify = true
                         snapshotToken = state.accessToken.orEmpty()
                     }
                 }
             }
-            if (shouldNotify) {
-                notifyNewToken(snapshotToken)
-            }
-
             if (grantType != "refresh_token") {
                 // Reset invitation handling flag after successful interactive authentication
                 invitationState.completeHandling()
@@ -1235,7 +1329,15 @@ class KindeClient private constructor(
                 return false
             }
 
-            scheduleTokenRefresh()
+            // Listeners are app code: call them only once the refresh state is released,
+            // and keep the schedule going even if one throws.
+            try {
+                if (shouldNotify) {
+                    notifyNewTokenIfCurrent(snapshotToken)
+                }
+            } finally {
+                scheduleTokenRefresh()
+            }
         } else {
             // Check if this is a 401/invalid_grant error (invalid refresh token)
             val isInvalidRefreshToken = ex?.let { exception ->
@@ -1474,8 +1576,8 @@ class KindeClient private constructor(
         // Capture store reference to prevent race condition if domain switches during async request
         val storeForRequest = store
 
-        // Fetch and store keys for the domain if not already present
-        if (storeForRequest.getKeys().isNullOrEmpty()) {
+        // Fetch and store keys for the domain if not already present (or unreadable)
+        if (!hasUsableKeys(storeForRequest)) {
             keysApi.getKeys().enqueue(object : Callback<Keys> {
                 override fun onResponse(call: Call<Keys>, response: Response<Keys>) {
                     response.body()?.let { keys ->
@@ -1500,6 +1602,33 @@ class KindeClient private constructor(
                 setupAuthState()
             }
         }
+    }
+
+    /**
+     * True when [store] holds signing keys this build can read. A cache written by an
+     * older minified build may store Key fields under obfuscated names; Gson then reads
+     * them back as nulls, and every token would fail verification. Such a cache is
+     * cleared so the keys are fetched again.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun hasUsableKeys(store: Store): Boolean {
+        val raw = store.getKeys()
+        if (raw.isNullOrEmpty()) return false
+        val usable = try {
+            // Gson ignores Kotlin nullability, so read the fields as nullable.
+            val keys: List<au.kinde.sdk.keys.Key?>? = gson.fromJson(raw, Keys::class.java)?.keys
+            !keys.isNullOrEmpty() && keys.all { key ->
+                key != null && (key.modulus as String?) != null && (key.exponent as String?) != null &&
+                    (key.keyType as String?) != null
+            }
+        } catch (e: Exception) {
+            false
+        }
+        if (!usable) {
+            android.util.Log.w("KindeSDK", "Cached signing keys are unreadable; fetching them again")
+            store.clearKeys()
+        }
+        return usable
     }
 
     /**
