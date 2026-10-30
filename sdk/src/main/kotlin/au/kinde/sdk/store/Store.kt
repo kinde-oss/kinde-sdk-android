@@ -26,6 +26,9 @@ import kotlin.random.Random.Default.nextBytes
  */
 class Store(context: Context, private val key: String) {
 
+    /** The Kinde domain this store holds data for. */
+    val domain: String get() = key
+
     // Create domain-specific SharedPreferences file to isolate state across domains
     // Sanitize the domain to create a safe filename (replace special chars with underscores)
     private val prefsName = "${PREFS_NAME}_${sanitizeDomainForFilename(key)}"

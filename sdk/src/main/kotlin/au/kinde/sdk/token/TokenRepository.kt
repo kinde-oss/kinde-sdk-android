@@ -81,9 +81,12 @@ class TokenRepository(private val tokenApi: TokenApi, private val version: Strin
     enum class Revocation {
         /** Kinde accepted it (RFC 7009: also for a token that was already invalid). */
         REVOKED,
-        /** Kinde refused the request itself (e.g. an unknown client); retrying won't help. */
+        /**
+         * Kinde refused the request itself (e.g. an unknown client); retrying won't help.
+         * Not used for 408 (timeout) or 429 (rate limited), which are transient.
+         */
         REJECTED,
-        /** No answer, or a server error: worth retrying later. */
+        /** No answer, a server error, 408 or 429: worth retrying later. */
         FAILED
     }
 
@@ -101,6 +104,7 @@ class TokenRepository(private val tokenApi: TokenApi, private val version: Strin
             response.errorBody()?.close()
             when {
                 response.isSuccessful -> Revocation.REVOKED
+                response.code() == HTTP_REQUEST_TIMEOUT || response.code() == HTTP_TOO_MANY_REQUESTS -> Revocation.FAILED
                 response.code() in 400..499 -> Revocation.REJECTED
                 else -> Revocation.FAILED
             }
@@ -110,6 +114,8 @@ class TokenRepository(private val tokenApi: TokenApi, private val version: Strin
     }
 
     private companion object {
+        private const val HTTP_REQUEST_TIMEOUT = 408
+        private const val HTTP_TOO_MANY_REQUESTS = 429
         private const val PARAM_TOKEN = "token"
         private const val PARAM_TOKEN_TYPE_HINT = "token_type_hint"
         private const val TOKEN_TYPE_REFRESH = "refresh_token"

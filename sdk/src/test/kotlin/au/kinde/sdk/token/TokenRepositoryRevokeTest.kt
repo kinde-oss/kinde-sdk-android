@@ -63,6 +63,14 @@ class TokenRepositoryRevokeTest {
     }
 
     @Test
+    fun `a timeout or rate limit is worth retrying`() {
+        for (code in listOf(408, 429)) {
+            val result = repository { reply(it, code) }.revokeRefreshToken("refresh-123", "client-abc")
+            assertEquals("HTTP $code", TokenRepository.Revocation.FAILED, result)
+        }
+    }
+
+    @Test
     fun `a network failure is worth retrying, and doesn't throw`() {
         val result = repository { throw IOException("offline") }
             .revokeRefreshToken("refresh-123", "client-abc")
