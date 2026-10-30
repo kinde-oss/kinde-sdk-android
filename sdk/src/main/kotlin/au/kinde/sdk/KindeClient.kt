@@ -332,23 +332,25 @@ class KindeClient private constructor(
             if (deliveringTokens) return
             deliveringTokens = true
         }
-        try {
-            while (true) {
-                val next = synchronized(tokenNotifyLock) {
-                    tokenNotifications.removeFirstOrNull() ?: run {
-                        deliveringTokens = false
-                        return
-                    }
+        // A listener that throws must not strand tokens queued behind it (for example
+        // by a refresh it triggered): keep draining, then rethrow the first failure.
+        var failure: Throwable? = null
+        while (true) {
+            val next = synchronized(tokenNotifyLock) {
+                tokenNotifications.removeFirstOrNull() ?: run {
+                    deliveringTokens = false
+                    null
                 }
-                if (synchronized(stateLock) { state.accessToken } == next) {
+            } ?: break
+            if (synchronized(stateLock) { state.accessToken } == next) {
+                try {
                     notifyNewToken(next)
+                } catch (t: Throwable) {
+                    failure?.addSuppressed(t) ?: run { failure = t }
                 }
             }
-        } catch (t: Throwable) {
-            // A listener threw: let the next notification start a fresh delivery.
-            synchronized(tokenNotifyLock) { deliveringTokens = false }
-            throw t
         }
+        failure?.let { throw it }
     }
 
     private fun notifyNewToken(token: String) {
@@ -399,7 +401,7 @@ class KindeClient private constructor(
         // Pre-refactor, every activity construction re-ran the keys fetch, so a
         // transient failure self-healed on the next screen. Preserve that: retry
         // whenever a facade attaches and keys are still missing.
-        if (store.getKeys().isNullOrEmpty()) {
+        if (!hasUsableKeys(store)) {
             initializeStoreData()
         }
 
@@ -1292,15 +1294,17 @@ class KindeClient private constructor(
             var snapshotToken = ""
             synchronized(stateLock) {
                 if (!isLoggingOut) {
+                    val previousAccessToken = state.accessToken
                     state.update(resp, ex)
                     apiClient.setBearerToken(state.accessToken.orEmpty())
                     store.saveState(state.jsonSerializeString())
                     lastTokenUpdateTime = System.currentTimeMillis()
 
-                    // Every successful exchange or refresh changes the token apps use, so
-                    // listeners always hear about it. notifyListener only decides what a
-                    // failure does (see below).
-                    if (!state.accessToken.isNullOrEmpty()) {
+                    // Listeners hear about every new access token. Kinde can return the same
+                    // token to an early refresh, and the scheduler may retry while it is
+                    // still inside the expiry buffer, so an unchanged token isn't announced.
+                    // notifyListener only decides what a failure does (see below).
+                    if (!state.accessToken.isNullOrEmpty() && state.accessToken != previousAccessToken) {
                         shouldNotify = true
                         snapshotToken = state.accessToken.orEmpty()
                     }
@@ -1572,8 +1576,8 @@ class KindeClient private constructor(
         // Capture store reference to prevent race condition if domain switches during async request
         val storeForRequest = store
 
-        // Fetch and store keys for the domain if not already present
-        if (storeForRequest.getKeys().isNullOrEmpty()) {
+        // Fetch and store keys for the domain if not already present (or unreadable)
+        if (!hasUsableKeys(storeForRequest)) {
             keysApi.getKeys().enqueue(object : Callback<Keys> {
                 override fun onResponse(call: Call<Keys>, response: Response<Keys>) {
                     response.body()?.let { keys ->
@@ -1598,6 +1602,33 @@ class KindeClient private constructor(
                 setupAuthState()
             }
         }
+    }
+
+    /**
+     * True when [store] holds signing keys this build can read. A cache written by an
+     * older minified build may store Key fields under obfuscated names; Gson then reads
+     * them back as nulls, and every token would fail verification. Such a cache is
+     * cleared so the keys are fetched again.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun hasUsableKeys(store: Store): Boolean {
+        val raw = store.getKeys()
+        if (raw.isNullOrEmpty()) return false
+        val usable = try {
+            // Gson ignores Kotlin nullability, so read the fields as nullable.
+            val keys: List<au.kinde.sdk.keys.Key?>? = gson.fromJson(raw, Keys::class.java)?.keys
+            !keys.isNullOrEmpty() && keys.all { key ->
+                key != null && (key.modulus as String?) != null && (key.exponent as String?) != null &&
+                    (key.keyType as String?) != null
+            }
+        } catch (e: Exception) {
+            false
+        }
+        if (!usable) {
+            android.util.Log.w("KindeSDK", "Cached signing keys are unreadable; fetching them again")
+            store.clearKeys()
+        }
+        return usable
     }
 
     /**

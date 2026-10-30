@@ -69,5 +69,29 @@ data class UserProfileV2 (
     @SerializedName("preferred_username")
     val preferredUsername: kotlin.String? = null
 
-)
+) {
+    // Binary and Java-source compatibility with the six-field version of this class.
+
+    constructor(
+        id: kotlin.String?,
+        providedId: kotlin.String?,
+        name: kotlin.String?,
+        givenName: kotlin.String?,
+        familyName: kotlin.String?,
+        updatedAt: kotlin.String?
+    ) : this(id, providedId, name, givenName, familyName, updatedAt, null, null, null, null, null)
+
+    @Deprecated("Kept for apps compiled against the six-field version", level = DeprecationLevel.HIDDEN)
+    fun copy(
+        id: kotlin.String? = this.id,
+        providedId: kotlin.String? = this.providedId,
+        name: kotlin.String? = this.name,
+        givenName: kotlin.String? = this.givenName,
+        familyName: kotlin.String? = this.familyName,
+        updatedAt: kotlin.String? = this.updatedAt
+    ): UserProfileV2 = copy(
+        id = id, providedId = providedId, name = name, givenName = givenName,
+        familyName = familyName, updatedAt = updatedAt, sub = sub
+    )
+}
 
