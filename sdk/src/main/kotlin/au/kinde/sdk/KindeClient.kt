@@ -142,6 +142,10 @@ class KindeClient private constructor(
     // notifyNewTokenIfCurrent). tokenNotifyLock guards only the queue: app callbacks
     // never run while it, refreshLock or stateLock is held.
     private val tokenNotifyLock = Any()
+    // True on a thread while it runs onNewToken. A refresh that a callback triggers
+    // (its API call got a 401) updates the session but isn't announced again, so a
+    // callback whose call keeps failing can't drive an endless refresh-and-notify loop.
+    private val inTokenCallback = ThreadLocal.withInitial { false }
     private val tokenNotifications = ArrayDeque<String>()
     private var deliveringTokens = false
     private val domainSwitchLock = Object()
@@ -322,27 +326,34 @@ class KindeClient private constructor(
             if (deliveringTokens) return
             deliveringTokens = true
         }
-        try {
-            while (true) {
-                val next = synchronized(tokenNotifyLock) {
-                    tokenNotifications.removeFirstOrNull() ?: run {
-                        deliveringTokens = false
-                        return
-                    }
+        // A listener that throws must not strand tokens queued behind it (for example
+        // by a refresh it triggered): keep draining, then rethrow the first failure.
+        var failure: Throwable? = null
+        while (true) {
+            val next = synchronized(tokenNotifyLock) {
+                tokenNotifications.removeFirstOrNull() ?: run {
+                    deliveringTokens = false
+                    null
                 }
-                if (synchronized(stateLock) { state.accessToken } == next) {
+            } ?: break
+            if (synchronized(stateLock) { state.accessToken } == next) {
+                try {
                     notifyNewToken(next)
+                } catch (t: Throwable) {
+                    failure?.addSuppressed(t) ?: run { failure = t }
                 }
             }
-        } catch (t: Throwable) {
-            // A listener threw: let the next notification start a fresh delivery.
-            synchronized(tokenNotifyLock) { deliveringTokens = false }
-            throw t
         }
+        failure?.let { throw it }
     }
 
     private fun notifyNewToken(token: String) {
-        LinkedHashSet(listeners).forEach { it.onNewToken(token) }
+        inTokenCallback.set(true)
+        try {
+            LinkedHashSet(listeners).forEach { it.onNewToken(token) }
+        } finally {
+            inTokenCallback.set(false)
+        }
     }
 
     private fun notifyLogout() {
@@ -1248,7 +1259,7 @@ class KindeClient private constructor(
                     // Every successful exchange or refresh changes the token apps use, so
                     // listeners always hear about it. notifyListener only decides what a
                     // failure does (see below).
-                    if (!state.accessToken.isNullOrEmpty()) {
+                    if (!state.accessToken.isNullOrEmpty() && !inTokenCallback.get()) {
                         shouldNotify = true
                         snapshotToken = state.accessToken.orEmpty()
                     }
@@ -1354,7 +1365,10 @@ class KindeClient private constructor(
             return data
         }
         if (exception != null) {
-            if (exception is TokenExpiredException) {
+            if (exception is TokenReplacedException) {
+                // A refresh landed while the request was in flight: retry with the new token.
+                return callApi(call.clone(), refreshed = true)
+            } else if (exception is TokenExpiredException) {
                 // Use notifyListener=false to prevent logout on API call token refresh
                 if (getToken(state.createTokenRefreshRequest(), notifyListener = false)) {
                     return callApi(call.clone(), refreshed = true)

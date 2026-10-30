@@ -3,6 +3,7 @@ package au.kinde.sdk.utils
 import android.os.Looper
 import au.kinde.sdk.NotAuthorizedException
 import au.kinde.sdk.TokenExpiredException
+import au.kinde.sdk.TokenReplacedException
 import au.kinde.sdk.WrongThreadException
 import net.openid.appauth.AuthState
 import org.json.JSONArray
@@ -27,11 +28,14 @@ fun <T> Call<T>.callApi(
             Pair(response.body(), null)
         } else {
             val errorBody = runCatching { response.errorBody()?.string() }.getOrNull()
+            // Classify the token that was actually sent: a refresh may have replaced it
+            // while the request was in flight.
+            val sentToken = sentBearerToken(response.raw().request.header("Authorization"))
             Pair(
                 null, if (!refreshed && !withoutAuthorization &&
-                    isRejectedToken(response.code(), errorBody, state.accessToken, System.currentTimeMillis())
+                    isRejectedToken(response.code(), errorBody, sentToken ?: state.accessToken, System.currentTimeMillis())
                 ) {
-                    TokenExpiredException
+                    if (tokenReplaced(sentToken, state.accessToken)) TokenReplacedException else TokenExpiredException
                 } else {
                     Exception(
                         "response is unsuccessful for ${
@@ -60,6 +64,14 @@ internal fun isRejectedToken(code: Int, errorBody: String?, accessToken: String?
         hasTokenErrorCode(errorBody) || isExpired(accessToken, nowMillis)
     else -> false
 }
+
+/** The token in an `Authorization: Bearer …` header, or null when there is none. */
+internal fun sentBearerToken(authorization: String?): String? =
+    authorization?.takeIf { it.startsWith("Bearer ", ignoreCase = true) }?.substring(7)?.trim()?.ifEmpty { null }
+
+/** True when the session now holds a different, non-empty token from the one the request sent. */
+internal fun tokenReplaced(sentToken: String?, currentToken: String?): Boolean =
+    sentToken != null && !currentToken.isNullOrEmpty() && sentToken != currentToken
 
 /**
  * True when Kinde's error body carries the code TOKEN_ERROR, as in

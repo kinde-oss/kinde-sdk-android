@@ -1,5 +1,6 @@
 package au.kinde.sdk.utils
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -66,5 +67,21 @@ class CallUtilTest {
     fun `an unreadable token doesn't count as expired`() {
         assertFalse(isRejectedToken(403, null, "not-a-jwt", now))
         assertFalse(isRejectedToken(403, null, null, now))
+    }
+
+    @Test
+    fun `the token sent is read from the Authorization header`() {
+        assertEquals("abc", sentBearerToken("Bearer abc"))
+        assertEquals(null, sentBearerToken(null))
+        assertEquals(null, sentBearerToken("Basic xyz"))
+        assertEquals(null, sentBearerToken("Bearer "))
+    }
+
+    @Test
+    fun `a request sent with a token since replaced is retried with the new one`() {
+        assertTrue(tokenReplaced("old", "new"))
+        assertFalse(tokenReplaced("same", "same"))
+        assertFalse(tokenReplaced(null, "new"))
+        assertFalse(tokenReplaced("old", null))
     }
 }
