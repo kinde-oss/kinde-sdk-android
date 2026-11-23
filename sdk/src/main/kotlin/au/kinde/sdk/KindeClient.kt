@@ -634,8 +634,13 @@ class KindeClient private constructor(
         val repository = tokenRepository
         // Recorded before the session is deleted, so a revocation cut short by the
         // process ending is retried on the next launch.
-        if (!refreshToken.isNullOrEmpty()) {
+        val recorded = !refreshToken.isNullOrEmpty() && try {
             addPendingRevocation(storeToClean, refreshToken, clientId)
+            true
+        } catch (e: Exception) {
+            // Storage that can't be written (or read) must not stop the logout.
+            android.util.Log.e("KindeSDK", "Couldn't record the refresh token revocation; sending it once without a retry", e)
+            false
         }
         clearRuntimeOverrides()
 
@@ -648,8 +653,10 @@ class KindeClient private constructor(
 
         // The end-session page ends the browser session only; revoke the refresh
         // token too so a copy of it can't mint new tokens after logout.
-        if (!refreshToken.isNullOrEmpty()) {
+        if (recorded) {
             revokePending(storeToClean, repository)
+        } else if (!refreshToken.isNullOrEmpty()) {
+            thread { repository.revokeRefreshToken(refreshToken, clientId) }
         }
 
         notifyLogout()
@@ -1506,14 +1513,26 @@ class KindeClient private constructor(
      * in storage untouched (there is no safe way to recover a token from it yet).
      */
     private fun pendingRevocations(store: Store): MutableList<JSONObject> {
-        val raw = store.getPendingRevocations()?.trim() ?: return mutableListOf()
         return try {
+            val raw = store.getPendingRevocations()?.trim() ?: return mutableListOf()
             val array = JSONArray(raw)
             (0 until array.length()).mapNotNull { array.optJSONObject(it) }.toMutableList()
         } catch (e: Exception) {
             android.util.Log.e("KindeSDK", "Pending refresh token revocations for ${store.domain} are unreadable; keeping them", e)
             mutableListOf()
         }
+    }
+
+    /**
+     * True when [store] has revocations waiting. Decrypting the record can fail (for
+     * example after the encryption key was lost); that is logged and treated as none,
+     * so startup never fails because of it. The record itself is left untouched.
+     */
+    private fun hasPendingRevocations(store: Store): Boolean = try {
+        store.getPendingRevocations() != null
+    } catch (e: Exception) {
+        android.util.Log.e("KindeSDK", "Pending refresh token revocations for ${store.domain} are unreadable; keeping them", e)
+        false
     }
 
     private fun savePendingRevocations(store: Store, records: List<JSONObject>) {
@@ -1538,16 +1557,21 @@ class KindeClient private constructor(
         }
         for (domain in domains) {
             if (domain == store.domain) continue // initializeStoreData handles the current store
-            val domainStore = Store(appContext, domain)
-            if (domainStore.getPendingRevocations() == null) {
-                synchronized(revocationLock) { setRevocationDomain(domain, pending = false) }
-                continue
+            // One domain's storage failing must not stop startup or the other domains.
+            try {
+                val domainStore = Store(appContext, domain)
+                if (!hasPendingRevocations(domainStore)) {
+                    synchronized(revocationLock) { setRevocationDomain(domain, pending = false) }
+                    continue
+                }
+                val repository = TokenRepository(
+                    ApiClient(HTTPS.format(domain)).createService(TokenApi::class.java),
+                    BuildConfig.SDK_VERSION
+                )
+                revokePending(domainStore, repository)
+            } catch (e: Exception) {
+                android.util.Log.e("KindeSDK", "Couldn't retry refresh token revocations for $domain", e)
             }
-            val repository = TokenRepository(
-                ApiClient(HTTPS.format(domain)).createService(TokenApi::class.java),
-                BuildConfig.SDK_VERSION
-            )
-            revokePending(domainStore, repository)
         }
     }
 
@@ -1631,7 +1655,7 @@ class KindeClient private constructor(
         val storeForRequest = store
 
         // A logout whose revocation didn't get through: try again.
-        if (storeForRequest.getPendingRevocations() != null) {
+        if (hasPendingRevocations(storeForRequest)) {
             revokePending(storeForRequest, tokenRepository)
         }
 
