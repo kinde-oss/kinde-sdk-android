@@ -137,6 +137,21 @@ class KindeClient private constructor(
     private var lastTokenUpdateTime = 0L
     private val stateLock = Object()
     private val refreshLock = Object()
+
+    // onNewToken deliveries after an exchange or refresh go through one queue (see
+    // notifyNewTokenIfCurrent). tokenNotifyLock guards only the queue: app callbacks
+    // never run while it, refreshLock or stateLock is held.
+    private val tokenNotifyLock = Any()
+    // How deep in onNewToken callbacks this thread is: 0 outside them, 1 while listeners
+    // hear a token from an ordinary refresh, 2 while they hear one that a callback's own
+    // API call refreshed, and so on. A refresh at depth MAX_ANNOUNCED_CALLBACK_DEPTH or
+    // deeper updates the session without being announced, so listeners still learn the
+    // token a callback's call refreshed, but a callback whose calls keep failing can't
+    // drive an endless refresh-and-notify loop.
+    private val tokenCallbackDepth = ThreadLocal.withInitial { 0 }
+    private class PendingToken(val token: String, val depth: Int)
+    private val tokenNotifications = ArrayDeque<PendingToken>()
+    private var deliveringTokens = false
     private val domainSwitchLock = Object()
 
     @Volatile
@@ -302,8 +317,53 @@ class KindeClient private constructor(
     internal fun activeEndSessionLauncher(): EndSessionLauncher? =
         endSessionRoutes.lastOrNull()?.launcher
 
-    private fun notifyNewToken(token: String) {
-        LinkedHashSet(listeners).forEach { it.onNewToken(token) }
+    /**
+     * Announces [token] to every listener, in the order tokens were issued. Tokens
+     * queue up and one caller delivers them: a token issued while a delivery is under
+     * way (by another thread, or by a listener whose API call refreshed) waits until
+     * every listener has heard the current one. A token already replaced by a newer
+     * one is skipped, so listeners never end on a stale token.
+     */
+    private fun notifyNewTokenIfCurrent(token: String) {
+        synchronized(tokenNotifyLock) {
+            // Remember how deep in callbacks the refresh ran, for the listeners' depth below.
+            tokenNotifications.addLast(PendingToken(token, tokenCallbackDepth.get()))
+            if (deliveringTokens) return
+            deliveringTokens = true
+        }
+        // A listener that throws must not strand tokens queued behind it (for example
+        // by a refresh it triggered): keep draining, then rethrow the first failure.
+        var failure: Throwable? = null
+        while (true) {
+            val next = synchronized(tokenNotifyLock) {
+                tokenNotifications.removeFirstOrNull() ?: run {
+                    deliveringTokens = false
+                    null
+                }
+            } ?: break
+            if (synchronized(stateLock) { state.accessToken } == next.token) {
+                try {
+                    notifyNewToken(next.token, depth = next.depth + 1)
+                } catch (t: Throwable) {
+                    failure?.addSuppressed(t) ?: run { failure = t }
+                }
+            }
+        }
+        failure?.let { throw it }
+    }
+
+    private fun notifyNewToken(token: String, depth: Int = tokenCallbackDepth.get() + 1) {
+        inTokenCallbacks(depth) { LinkedHashSet(listeners).forEach { it.onNewToken(token) } }
+    }
+
+    private inline fun inTokenCallbacks(depth: Int, block: () -> Unit) {
+        val outer = tokenCallbackDepth.get()
+        tokenCallbackDepth.set(depth)
+        try {
+            block()
+        } finally {
+            tokenCallbackDepth.set(outer)
+        }
     }
 
     private fun notifyLogout() {
@@ -325,7 +385,11 @@ class KindeClient private constructor(
     // facade that initiated the flow when known, matching the pre-refactor
     // per-activity behavior; session-level events still broadcast.
     private fun notifyNewTokenTo(target: SDKListener?, token: String) {
-        target?.onNewToken(token) ?: notifyNewToken(token)
+        if (target != null) {
+            inTokenCallbacks(tokenCallbackDepth.get() + 1) { target.onNewToken(token) }
+        } else {
+            notifyNewToken(token)
+        }
     }
 
     private fun notifyLogoutTo(target: SDKListener?) {
@@ -1206,16 +1270,18 @@ class KindeClient private constructor(
                     store.saveState(state.jsonSerializeString())
                     lastTokenUpdateTime = System.currentTimeMillis()
 
-                    if (notifyListener && !state.accessToken.isNullOrEmpty()) {
+                    // Every successful exchange or refresh changes the token apps use, so
+                    // listeners hear about it, unless it ran too deep inside onNewToken
+                    // callbacks (see tokenCallbackDepth). notifyListener only decides what
+                    // a failure does (see below).
+                    if (!state.accessToken.isNullOrEmpty() &&
+                        tokenCallbackDepth.get() < MAX_ANNOUNCED_CALLBACK_DEPTH
+                    ) {
                         shouldNotify = true
                         snapshotToken = state.accessToken.orEmpty()
                     }
                 }
             }
-            if (shouldNotify) {
-                notifyNewToken(snapshotToken)
-            }
-
             if (grantType != "refresh_token") {
                 // Reset invitation handling flag after successful interactive authentication
                 invitationState.completeHandling()
@@ -1235,7 +1301,15 @@ class KindeClient private constructor(
                 return false
             }
 
-            scheduleTokenRefresh()
+            // Listeners are app code: call them only once the refresh state is released,
+            // and keep the schedule going even if one throws.
+            try {
+                if (shouldNotify) {
+                    notifyNewTokenIfCurrent(snapshotToken)
+                }
+            } finally {
+                scheduleTokenRefresh()
+            }
         } else {
             // Check if this is a 401/invalid_grant error (invalid refresh token)
             val isInvalidRefreshToken = ex?.let { exception ->
@@ -1243,8 +1317,6 @@ class KindeClient private constructor(
                 val isInvalidGrant = exception.error == "invalid_grant"
                 is401 || isInvalidGrant
             } ?: false
-
-            ex?.let { notifyException(TokenException("${ex.error} ${ex.errorDescription}")) }
 
             // Always logout on invalid refresh token (401/invalid_grant)
             // For other errors, only logout if notifyListener is true (manual refresh)
@@ -1260,6 +1332,10 @@ class KindeClient private constructor(
                     }
                 }
             }
+
+            // Listeners are app code: tell them only once the refresh state is released, so
+            // one that refreshes from onException doesn't wait on this refresh forever.
+            ex?.let { notifyException(TokenException("${ex.error} ${ex.errorDescription}")) }
         }
         return resp != null
     }
@@ -1308,7 +1384,10 @@ class KindeClient private constructor(
             return data
         }
         if (exception != null) {
-            if (exception is TokenExpiredException) {
+            if (exception is TokenReplacedException) {
+                // A refresh landed while the request was in flight: retry with the new token.
+                return callApi(call.clone(), refreshed = true)
+            } else if (exception is TokenExpiredException) {
                 // Use notifyListener=false to prevent logout on API call token refresh
                 if (getToken(state.createTokenRefreshRequest(), notifyListener = false)) {
                     return callApi(call.clone(), refreshed = true)
@@ -1645,6 +1724,10 @@ class KindeClient private constructor(
         private const val AUTH_URL = "https://%s/oauth2/auth"
         private const val TOKEN_URL = "https://%s/oauth2/token"
         private const val LOGOUT_URL = "https://%s/logout"
+
+        // A refresh made from listeners hearing an ordinary token (depth 1) is announced;
+        // one made from listeners hearing that announcement (depth 2) is not.
+        private const val MAX_ANNOUNCED_CALLBACK_DEPTH = 2
 
         private const val REGISTRATION_PAGE_PARAM_NAME = "start_page"
         private const val REGISTRATION_PAGE_PARAM_VALUE = "registration"

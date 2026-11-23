@@ -8,6 +8,9 @@ object NotAuthorizedException : IllegalStateException()
 
 object TokenExpiredException : IllegalStateException()
 
+/** The request was rejected with a token that a refresh has since replaced; retry without refreshing. */
+internal object TokenReplacedException : IllegalStateException()
+
 object WrongThreadException : IllegalStateException()
 
 class AuthException(override val message: String?) : Exception()
