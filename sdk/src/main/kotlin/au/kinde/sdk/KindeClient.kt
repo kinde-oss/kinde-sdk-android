@@ -1509,30 +1509,35 @@ class KindeClient private constructor(
     }
 
     /**
-     * The revocations a logout recorded in [store]. Unreadable data is logged and left
-     * in storage untouched (there is no safe way to recover a token from it yet).
+     * The revocations a logout recorded in [store], or null when the record can't be
+     * decrypted or parsed (for example after the encryption key was lost). A failure is
+     * logged; reading never changes what is stored.
      */
-    private fun pendingRevocations(store: Store): MutableList<JSONObject> {
+    private fun readPendingRevocations(store: Store): MutableList<JSONObject>? {
         return try {
             val raw = store.getPendingRevocations()?.trim() ?: return mutableListOf()
             val array = JSONArray(raw)
             (0 until array.length()).mapNotNull { array.optJSONObject(it) }.toMutableList()
         } catch (e: Exception) {
-            android.util.Log.e("KindeSDK", "Pending refresh token revocations for ${store.domain} are unreadable; keeping them", e)
-            mutableListOf()
+            android.util.Log.e("KindeSDK", "Pending refresh token revocations for ${store.domain} are unreadable", e)
+            null
         }
     }
 
+    /** The readable revocations in [store]; an unreadable record counts as none to send. */
+    private fun pendingRevocations(store: Store): MutableList<JSONObject> =
+        readPendingRevocations(store) ?: mutableListOf()
+
     /**
-     * True when [store] has revocations waiting. Decrypting the record can fail (for
-     * example after the encryption key was lost); that is logged and treated as none,
-     * so startup never fails because of it. The record itself is left untouched.
+     * Whether [store] has revocations waiting: true or false, or null when the record
+     * can't be read. Startup treats null as nothing to send but keeps the record and the
+     * domain's place in the startup index, in case the failure is temporary.
      */
-    private fun hasPendingRevocations(store: Store): Boolean = try {
+    private fun hasPendingRevocations(store: Store): Boolean? = try {
         store.getPendingRevocations() != null
     } catch (e: Exception) {
         android.util.Log.e("KindeSDK", "Pending refresh token revocations for ${store.domain} are unreadable; keeping them", e)
-        false
+        null
     }
 
     private fun savePendingRevocations(store: Store, records: List<JSONObject>) {
@@ -1560,9 +1565,14 @@ class KindeClient private constructor(
             // One domain's storage failing must not stop startup or the other domains.
             try {
                 val domainStore = Store(appContext, domain)
-                if (!hasPendingRevocations(domainStore)) {
-                    synchronized(revocationLock) { setRevocationDomain(domain, pending = false) }
-                    continue
+                when (hasPendingRevocations(domainStore)) {
+                    true -> Unit
+                    false -> {
+                        // Confirmed empty: this domain no longer needs checking at startup.
+                        synchronized(revocationLock) { setRevocationDomain(domain, pending = false) }
+                        continue
+                    }
+                    null -> continue // unreadable: keep the record and its index entry
                 }
                 val repository = TokenRepository(
                     ApiClient(HTTPS.format(domain)).createService(TokenApi::class.java),
@@ -1577,7 +1587,11 @@ class KindeClient private constructor(
 
     private fun addPendingRevocation(store: Store, token: String, clientId: String) {
         synchronized(revocationLock) {
-            val records = pendingRevocations(store)
+            // A record that can't be read holds nothing that can still be sent, so it is
+            // replaced: keeping it would leave this logout's token without a retry.
+            val records = readPendingRevocations(store) ?: mutableListOf<JSONObject>().also {
+                android.util.Log.w("KindeSDK", "Replacing unreadable pending revocations for ${store.domain}")
+            }
             if (records.none { it.optString(REVOKE_TOKEN) == token }) {
                 records += JSONObject().put(REVOKE_TOKEN, token).put(REVOKE_CLIENT_ID, clientId)
                 savePendingRevocations(store, records)
@@ -1604,12 +1618,16 @@ class KindeClient private constructor(
             revocationWorkerRunning = true
         }
         thread {
+            // Set once this worker hands the flag back with an empty queue. After that a
+            // new worker may own the flag, so the cleanup below must not clear it.
+            var released = false
             try {
                 while (true) {
                     val (jobStore, jobRepository) = synchronized(revocationLock) {
                         val next = revocationJobs.entries.firstOrNull()
                         if (next == null) {
                             revocationWorkerRunning = false
+                            released = true
                             return@thread
                         }
                         revocationJobs.remove(next.key)
@@ -1624,7 +1642,8 @@ class KindeClient private constructor(
                     }
                 }
             } finally {
-                synchronized(revocationLock) { revocationWorkerRunning = false }
+                // Only an abnormal exit gets here still owning the flag.
+                if (!released) synchronized(revocationLock) { revocationWorkerRunning = false }
             }
         }
     }
@@ -1655,7 +1674,7 @@ class KindeClient private constructor(
         val storeForRequest = store
 
         // A logout whose revocation didn't get through: try again.
-        if (hasPendingRevocations(storeForRequest)) {
+        if (hasPendingRevocations(storeForRequest) == true) {
             revokePending(storeForRequest, tokenRepository)
         }
 
