@@ -1292,8 +1292,15 @@ class KindeClient private constructor(
 
             var shouldNotify = false
             var snapshotToken = ""
+            var sessionReplaced = false
             synchronized(stateLock) {
-                if (!isLoggingOut) {
+                // A refresh answers for the session that sent it. If that session ended
+                // while the request was in flight (a logout completed, or a new sign-in
+                // replaced it), the session no longer holds the refresh token the request
+                // sent: drop the response rather than sign the user back in.
+                if (grantType == "refresh_token" && state.refreshToken != tokenRequest.refreshToken) {
+                    sessionReplaced = true
+                } else if (!isLoggingOut) {
                     val previousAccessToken = state.accessToken
                     state.update(resp, ex)
                     apiClient.setBearerToken(state.accessToken.orEmpty())
@@ -1323,6 +1330,11 @@ class KindeClient private constructor(
                 }
             }
 
+            if (sessionReplaced) {
+                android.util.Log.w("KindeSDK", "Dropped a token refresh for a session that ended while it was in flight")
+                return false
+            }
+
             // Check if logout happened during state update
             val logoutHappened = synchronized(stateLock) { isLoggingOut }
             if (logoutHappened) {
@@ -1346,8 +1358,6 @@ class KindeClient private constructor(
                 is401 || isInvalidGrant
             } ?: false
 
-            ex?.let { notifyException(TokenException("${ex.error} ${ex.errorDescription}")) }
-
             // Always logout on invalid refresh token (401/invalid_grant)
             // For other errors, only logout if notifyListener is true (manual refresh)
             try {
@@ -1362,6 +1372,10 @@ class KindeClient private constructor(
                     }
                 }
             }
+
+            // Listeners are app code: tell them only once the refresh state is released, so
+            // one that refreshes from onException doesn't wait on this refresh forever.
+            ex?.let { notifyException(TokenException("${ex.error} ${ex.errorDescription}")) }
         }
         return resp != null
     }
