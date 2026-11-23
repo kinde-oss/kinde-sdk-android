@@ -51,6 +51,10 @@ class Store(context: Context, private val key: String) {
 
     fun getKeys(): String? = retrieve(KEYS_PREF)
 
+    fun clearKeys() {
+        authPrefs.edit().remove(KEYS_PREF).apply()
+    }
+
     private fun store(dataKey: String, data: String) {
         authPrefs.edit().putString(dataKey, encryptMsg(data)).apply()
     }

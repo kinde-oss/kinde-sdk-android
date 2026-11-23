@@ -59,7 +59,9 @@ data class FeatureFlagsResponse(
                     return@mapNotNull null
                 }
             }
-            key to Flag(key, flagType, value, false)
+            // Gson reads every JSON number as a Double; the token path gives Ints.
+            val typedValue = if (flagType == FlagType.Integer && value is Number) value.toInt() else value
+            key to Flag(key, flagType, typedValue, false)
         }.toMap()
     }
 }

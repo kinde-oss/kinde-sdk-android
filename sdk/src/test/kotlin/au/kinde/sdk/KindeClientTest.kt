@@ -298,4 +298,26 @@ class KindeClientTest {
             awaitCondition { listener.logoutCount == 1 }
         )
     }
+
+    @Test
+    fun `key caches from older minified builds are cleared so keys are fetched again`() {
+        installKindeMetaData(context)
+        val client = KindeClient.getInstance(context)
+        val store = au.kinde.sdk.store.Store(context, "cache-test.kinde.com")
+
+        // Field names an older build obfuscated: Gson can't map them to Keys/Key.
+        store.saveKeys("""{"a":[{"a":"AQAB","b":"mod","c":"RS256","d":"k1","e":"RSA"}]}""")
+        assertFalse(client.hasUsableKeys(store))
+        assertNull(store.getKeys())
+
+        store.saveKeys("""{"keys":[{"e":"AQAB","n":"mod","alg":"RS256","kid":"k1","kty":"RSA"}]}""")
+        assertTrue(client.hasUsableKeys(store))
+    }
+
+    @Test
+    fun `the six-field UserProfileV2 constructor still works`() {
+        val profile = au.kinde.sdk.api.model.UserProfileV2("id", "pid", "Ann Lee", "Ann", "Lee", "2026-01-01")
+        assertEquals("Ann", profile.givenName)
+        assertNull(profile.email)
+    }
 }

@@ -6,6 +6,7 @@ import au.kinde.sdk.model.Flag
 import au.kinde.sdk.model.FlagType
 import au.kinde.sdk.model.TokenType
 import au.kinde.sdk.model.UserDetails
+import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.reflect.KClass
 import android.util.Log
@@ -16,6 +17,20 @@ object ClaimDelegate : ClaimApi {
 
     override fun getClaim(claim: String, tokenType: TokenType): ClaimData.Claim {
         return ClaimData.Claim(claim, getClaimInternal(claim, tokenType, String::class))
+    }
+
+    override fun getClaimValue(claim: String, tokenType: TokenType): Any? {
+        val token = tokenProvider?.getToken(tokenType) ?: return null
+        val data = runCatching { JSONObject(decodeToken(token)) }.getOrNull() ?: return null
+        return if (data.has(claim)) fromJson(data.get(claim)) else null
+    }
+
+    /** JSON values as Kotlin ones: objects become maps, arrays lists, JSON null null. */
+    private fun fromJson(value: Any?): Any? = when (value) {
+        JSONObject.NULL, null -> null
+        is JSONObject -> value.keys().asSequence().associateWith { fromJson(value.get(it)) }
+        is JSONArray -> (0 until value.length()).map { fromJson(value.get(it)) }
+        else -> value
     }
 
     override fun getUserDetails(): UserDetails = UserDetails(
@@ -84,7 +99,9 @@ object ClaimDelegate : ClaimApi {
             flagsObject.has(code) -> {
                 val flagObject = flagsObject.getJSONObject(code)
                 if (flagType != null && flagObject.getString(FLAG_TYPE) != flagType.letter) {
-                    return null
+                    // Same as the API path: a flag of another type falls back to the default.
+                    Log.w("KindeClaim", "Flag '$code' type mismatch: expected $flagType, got ${flagObject.getString(FLAG_TYPE)}")
+                    return defaultValue?.let { Flag(code, null, it, true) }
                 }
                 return Flag(
                     code,
@@ -183,7 +200,17 @@ object ClaimDelegate : ClaimApi {
 
 interface ClaimApi {
 
+    /**
+     * The claim's value as text: strings as they are, numbers, booleans, arrays and
+     * objects as their JSON. Use [getClaimValue] for the typed value.
+     */
     fun getClaim(claim: String, tokenType: TokenType = TokenType.ACCESS_TOKEN): ClaimData.Claim
+
+    /**
+     * The claim's value with its JSON type: String, Boolean, Int, Long or Double,
+     * List for arrays and Map for objects. Null when the token or claim is missing.
+     */
+    fun getClaimValue(claim: String, tokenType: TokenType = TokenType.ACCESS_TOKEN): Any?
 
     fun getUserDetails(): UserDetails
 

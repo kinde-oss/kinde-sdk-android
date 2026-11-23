@@ -19,6 +19,13 @@ interface OAuthApi {
     @GET("account_api/v1/entitlement")
     fun getEntitlement(@Query("key") key: String): Call<EntitlementResponse>
 
+    /** Kept so apps compiled against the parameterless version keep working. */
     @GET("account_api/v1/entitlements")
     fun getEntitlements(): Call<EntitlementsResponse>
+
+    @GET("account_api/v1/entitlements")
+    fun getEntitlements(
+        @Query("page_size") pageSize: Int? = null,
+        @Query("starting_after") startingAfter: String? = null
+    ): Call<EntitlementsResponse>
 }

@@ -52,7 +52,65 @@ data class UserProfileV2 (
     val familyName: kotlin.String? = null,
 
     @SerializedName("updated_at")
-    val updatedAt: kotlin.String? = null
+    val updatedAt: kotlin.String? = null,
 
-)
+    @SerializedName("sub")
+    val sub: kotlin.String? = null,
+
+    @SerializedName("email")
+    val email: kotlin.String? = null,
+
+    @SerializedName("email_verified")
+    val emailVerified: kotlin.Boolean? = null,
+
+    @SerializedName("picture")
+    val picture: kotlin.String? = null,
+
+    @SerializedName("preferred_username")
+    val preferredUsername: kotlin.String? = null
+
+) {
+    // Binary and Java-source compatibility with the six-field version of this class.
+
+    constructor(
+        id: kotlin.String?,
+        providedId: kotlin.String?,
+        name: kotlin.String?,
+        givenName: kotlin.String?,
+        familyName: kotlin.String?,
+        updatedAt: kotlin.String?
+    ) : this(id, providedId, name, givenName, familyName, updatedAt, null, null, null, null, null)
+
+    /**
+     * The constructor Kotlin apps compiled against the six-field version call when they
+     * leave arguments out: the six fields, a bit mask of the omitted ones, and a marker.
+     * Every old default was null and omitted arguments arrive as null, so the mask
+     * needs no handling.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    @Deprecated("Kept for apps compiled against the six-field version", level = DeprecationLevel.HIDDEN)
+    constructor(
+        id: kotlin.String?,
+        providedId: kotlin.String?,
+        name: kotlin.String?,
+        givenName: kotlin.String?,
+        familyName: kotlin.String?,
+        updatedAt: kotlin.String?,
+        omitted: kotlin.Int,
+        marker: kotlin.jvm.internal.DefaultConstructorMarker?
+    ) : this(id, providedId, name, givenName, familyName, updatedAt, null, null, null, null, null)
+
+    @Deprecated("Kept for apps compiled against the six-field version", level = DeprecationLevel.HIDDEN)
+    fun copy(
+        id: kotlin.String? = this.id,
+        providedId: kotlin.String? = this.providedId,
+        name: kotlin.String? = this.name,
+        givenName: kotlin.String? = this.givenName,
+        familyName: kotlin.String? = this.familyName,
+        updatedAt: kotlin.String? = this.updatedAt
+    ): UserProfileV2 = copy(
+        id = id, providedId = providedId, name = name, givenName = givenName,
+        familyName = familyName, updatedAt = updatedAt, sub = sub
+    )
+}
 

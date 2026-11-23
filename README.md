@@ -76,6 +76,33 @@ activity-bound `KindeSDK`, constructed in `onCreate` as shown above. Creating a
 intended pattern — it is a thin facade, and all of them share the same
 `KindeClient` state underneath.
 
+To make sure a token is fresh before using it (for example in a worker that runs
+after the app spent a while in the background, where the refresh schedule pauses),
+call `refreshToken()` off the main thread:
+
+```kotlin
+val refreshed = withContext(Dispatchers.IO) { client.refreshToken() }
+```
+
+## Threading
+
+- Methods that call Kinde over the network (`getUser()`, `getUserProfileV2()`,
+  `getEntitlements()`, `getEntitlement()`, `refreshToken()`, and the permission,
+  role and flag methods with `ApiOptions(forceApi = true)`) block. Call them off
+  the main thread. On the main thread they make no request: they return null
+  (false for `refreshToken()`) and report `WrongThreadException` to
+  `SDKListener.onException`; the `forceApi` variants throw.
+- Methods that read the tokens (`getToken()`, `isAuthenticated()`, claims, and the
+  permission, role and flag methods without `forceApi`) are safe on any thread.
+- `SDKListener` callbacks can arrive on any thread. `onNewToken` after a sign-in or
+  a refresh comes from a background thread, so switch to the main thread before
+  touching UI.
+
+## Code shrinking (R8)
+
+The SDK ships consumer ProGuard rules that keep the models Gson fills by
+reflection, so apps with `minifyEnabled true` need no extra rules for it.
+
 ## Publishing
 
 The core team handles publishing.

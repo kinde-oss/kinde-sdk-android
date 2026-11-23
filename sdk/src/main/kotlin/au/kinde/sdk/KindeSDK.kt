@@ -1,6 +1,7 @@
 package au.kinde.sdk
 
 import android.content.Intent
+import androidx.annotation.WorkerThread
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.DefaultLifecycleObserver
@@ -32,6 +33,10 @@ import au.kinde.sdk.utils.TokenProvider
  *
  * Tokens can also be read without any activity via
  * `KindeClient.getInstance(context)` — for example from an OkHttp interceptor.
+ *
+ * Threading: methods that call Kinde over the network block and must be called off
+ * the main thread, and [SDKListener] callbacks can arrive on any thread. See
+ * [KindeClient] for the details.
  */
 class KindeSDK(
     private val activity: ComponentActivity,
@@ -234,7 +239,17 @@ class KindeSDK(
 
     fun getEntitlement(key: String): EntitlementResponse? = client.getEntitlement(key)
 
-    fun getEntitlements(): EntitlementsResponse? = client.getEntitlements()
+    /** One page of the user's entitlements; see [KindeClient.getEntitlements] for paging. */
+    @JvmOverloads
+    fun getEntitlements(pageSize: Int? = null, startingAfter: String? = null): EntitlementsResponse? =
+        client.getEntitlements(pageSize, startingAfter)
+
+    /**
+     * Refreshes the access token now. Blocking: call it off the main thread.
+     * See [KindeClient.refreshToken].
+     */
+    @WorkerThread
+    fun refreshToken(): Boolean = client.refreshToken()
 
     fun createUser(createUserRequest: CreateUserRequest? = null): CreateUser200Response? =
         client.createUser(createUserRequest)
