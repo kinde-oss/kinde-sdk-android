@@ -1,5 +1,6 @@
 package au.kinde.sdk.token
 
+import okhttp3.ResponseBody
 import retrofit2.Call
 import retrofit2.http.FieldMap
 import retrofit2.http.FormUrlEncoded
@@ -20,4 +21,11 @@ interface TokenApi {
         @Header("Kinde-SDK") version: String,
         @FieldMap params: Map<String, String>
     ): Call<String>
+
+    @POST("oauth2/revoke")
+    @FormUrlEncoded
+    fun revokeToken(
+        @Header("Kinde-SDK") version: String,
+        @FieldMap params: Map<String, String>
+    ): Call<ResponseBody>
 }

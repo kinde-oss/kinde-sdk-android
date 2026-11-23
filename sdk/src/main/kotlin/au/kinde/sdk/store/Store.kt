@@ -26,6 +26,9 @@ import kotlin.random.Random.Default.nextBytes
  */
 class Store(context: Context, private val key: String) {
 
+    /** The Kinde domain this store holds data for. */
+    val domain: String get() = key
+
     // Create domain-specific SharedPreferences file to isolate state across domains
     // Sanitize the domain to create a safe filename (replace special chars with underscores)
     private val prefsName = "${PREFS_NAME}_${sanitizeDomainForFilename(key)}"
@@ -50,6 +53,18 @@ class Store(context: Context, private val key: String) {
     }
 
     fun getKeys(): String? = retrieve(KEYS_PREF)
+
+    /**
+     * Refresh tokens logout still has to revoke (a JSON array), kept until Kinde has
+     * answered for each. Written synchronously so the record survives the process.
+     */
+    fun savePendingRevocations(records: String?) {
+        authPrefs.edit().apply {
+            if (records == null) remove(PENDING_REVOCATION_PREF) else putString(PENDING_REVOCATION_PREF, encryptMsg(records))
+        }.commit()
+    }
+
+    fun getPendingRevocations(): String? = retrieve(PENDING_REVOCATION_PREF)
 
     private fun store(dataKey: String, data: String) {
         authPrefs.edit().putString(dataKey, encryptMsg(data)).apply()
@@ -114,6 +129,7 @@ class Store(context: Context, private val key: String) {
         private const val PREFS_NAME = "app_prefs_secure"
         private const val AUTH_STATE_PREF = "auth_state"
         private const val KEYS_PREF = "keys"
+        private const val PENDING_REVOCATION_PREF = "pending_revocation"
         private const val IV_PREF = "iv"
 
         private const val IV_SIZE = 16
